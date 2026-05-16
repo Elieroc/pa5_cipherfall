@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash /tmp/tiny_obfv2.sh)",
+      "Bash(bash /tmp/medium_obfv2.sh)",
+      "WebFetch(domain:lolexfil.github.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(chmod +x *)",
+      "Read(//tmp/test_drop/chunks/**)",
+      "Read(//tmp/test_drop/extracted/**)",
+      "Bash(fuser -k 9443/tcp)",
+      "Bash(fuser -k 9444/tcp)"
+    ]
+  }
+}

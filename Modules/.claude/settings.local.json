@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x *)",
+      "Bash(bash obfuscator_v2.sh ../Recon/recon.sh)",
+      "Bash(bash *)",
+      "Read(//var/log/**)",
+      "Bash(systemctl is-active *)",
+      "Read(//etc/**)",
+      "Bash(auditctl -l)",
+      "Bash(utmpdump /var/run/utmp)",
+      "Bash(tty)",
+      "Bash(printf '#include <lastlog.h>\\\\n#include <stdio.h>\\\\nint main\\(\\){printf\\(\"%%zu\\\\\\\\n\",sizeof\\(struct lastlog\\)\\);return 0;}')",
+      "Bash(gcc /tmp/ll.c -o /tmp/ll)",
+      "Bash(/tmp/ll)",
+      "Bash(rm -f /tmp/ll /tmp/ll.c)"
+    ]
+  }
+}
