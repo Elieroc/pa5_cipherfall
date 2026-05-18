@@ -24,7 +24,9 @@
       "Bash(python3 renamer.py --view /tmp/cGF5bG9hZA.py)",
       "Bash(python3 renamer.py --view /tmp/ZGF0YS50YXI.gz)",
       "Bash(python3 renamer.py --view /tmp/bm9leHQ)",
-      "Bash(python3 renamer.py --view /tmp/recon.sh)"
+      "Bash(python3 renamer.py --view /tmp/recon.sh)",
+      "Bash(ssh *)",
+      "Bash(scp *)"
     ]
   }
 }
