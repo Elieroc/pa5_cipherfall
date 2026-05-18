@@ -3,7 +3,7 @@
 # obfuscator_v2.sh — Obfuscateur bash avancé (technique unique combinée)
 # Usage: ./obfuscator_v2.sh <script.sh>
 # Techniques :
-#   1. Payload   : gzip + base64 + ROT13 (substitution sur l'alphabet base64)
+#   1. Payload   : strip des commentaires (#) et lignes vides, puis gzip + base64 + ROT13
 #   2. Chunks    : nombre fixe cible (30-60) INDÉPENDANT de la taille du source ;
 #                  chunk_size est calculé dynamiquement (ceil(payload/N)) pour que
 #                  la taille du payload ne se lise pas dans le nombre de lignes.
@@ -76,8 +76,8 @@ gen_fake_line() {
     printf '%s\n' "${fv}='${g}'"
 }
 
-# ── Étape 1 : gzip + base64 + ROT13 ──────────────────────────────────────────
-payload=$(gzip -c "$INPUT" | base64 -w 0 | tr 'A-Za-z' 'N-ZA-Mn-za-m')
+# ── Étape 1 : strip commentaires/blancs, gzip + base64 + ROT13 ───────────────
+payload=$(grep -Ev '^\s*#|^\s*$' "$INPUT" | gzip -c | base64 -w 0 | tr 'A-Za-z' 'N-ZA-Mn-za-m')
 
 # ── Étape 2 : nombre de chunks FIXE, indépendant de la taille du payload ──────
 TARGET_CHUNKS=$(( RANDOM % 31 + 30 ))
