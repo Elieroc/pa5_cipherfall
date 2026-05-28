@@ -27,7 +27,13 @@
       "Bash(python3 renamer.py --view /tmp/recon.sh)",
       "Bash(ssh *)",
       "Bash(scp *)",
-      "Bash(grep -v '^\\\\s*#\\\\|^\\\\s*$' \"/home/elie/Nextcloud/Documents/Scolaire/ESGI/Cours 2025-2026/Projet Annuel/Modules/Recon/recon.sh\")"
+      "Bash(grep -v '^\\\\s*#\\\\|^\\\\s*$' \"/home/elie/Nextcloud/Documents/Scolaire/ESGI/Cours 2025-2026/Projet Annuel/Modules/Recon/recon.sh\")",
+      "Bash(make *)",
+      "Read(//usr/lib/modules/**)",
+      "Read(//usr/src/**)",
+      "Bash(python3 -m py_compile \"/home/elie/Nextcloud/Documents/Scolaire/ESGI/Cours 2025-2026/Projet Annuel/Modules/C2/server.py\")",
+      "Bash(python3 -m py_compile \"/home/elie/Nextcloud/Documents/Scolaire/ESGI/Cours 2025-2026/Projet Annuel/Modules/C2/agent.py\")",
+      "Bash(python3 -m py_compile \"/home/elie/Nextcloud/Documents/Scolaire/ESGI/Cours 2025-2026/Projet Annuel/Modules/C2/operator.py\")"
     ]
   }
 }
