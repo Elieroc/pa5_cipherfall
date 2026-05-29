@@ -23,6 +23,11 @@
  *   crashes after reading but before sending a result, the task is lost and
  *   must be re-queued by the operator.
  *
+ * Agent discovery:
+ *   GET /agents lists all agent IDs that have an active hb: key in KV.
+ *   The server uses this to auto-register new agents on their first heartbeat,
+ *   removing the need for manual operator registration.
+ *
  * Authentication:
  *   All requests must carry  Authorization: Bearer <WORKER_SECRET>.
  *   WORKER_SECRET is a Cloudflare secret set via:
@@ -40,6 +45,7 @@
  *   - KV is eventually consistent; in practice propagation is <100 ms globally.
  *   - Only one pending task per agent at a time (later PUT overwrites earlier).
  *   - No task delivery confirmation; fire-and-forget from the server's view.
+ *   - GET /agents returns at most 1000 keys (Cloudflare KV list limit).
  */
 
 export default {
@@ -50,7 +56,18 @@ export default {
     }
 
     const url   = new URL(request.url);
-    const parts = url.pathname.replace(/^\/+/, "").split("/");
+    const parts = url.pathname.replace(/^\/+/, "").split("/").filter(p => p.length > 0);
+
+    // Agent discovery — GET /agents
+    if (parts.length === 1 && parts[0] === "agents" && request.method === "GET") {
+      const list = await env.KV.list({ prefix: "hb:" });
+      const ids  = list.keys.map(k => k.name.slice(3));
+      return new Response(JSON.stringify(ids), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     if (parts.length !== 2) {
       return new Response(null, { status: 404 });
     }
