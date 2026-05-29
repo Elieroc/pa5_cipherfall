@@ -56,15 +56,14 @@ Limitations:
 
 import asyncio, base64, hashlib, hmac as _stdlib_hmac, json, os, sqlite3, time, uuid
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 import uvicorn, httpx
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 
-WORKER_URL = os.environ.get("WORKER_URL",  "https://your-worker.workers.dev")
-PSK        = os.environ.get("C2_PSK",      "changeme")
+WORKER_URL = os.environ.get("WORKER_URL",  "https://cipherfall-c2.cipherfall-c2.workers.dev/")
+PSK        = os.environ.get("C2_PSK",      "CeciEstMonPSK")
 DB_PATH    = os.environ.get("C2_DB",       "c2.db")
 ADMIN_PORT = int(os.environ.get("C2_ADMIN", "1337"))
 POLL_INT   = int(os.environ.get("C2_POLL",  "10"))

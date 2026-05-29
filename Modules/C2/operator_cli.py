@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-operator.py — Cipherfall C2 Operator CLI
+operator_cli.py — Cipherfall C2 Operator CLI
 
 Talks to the admin API on localhost (server.py). No external dependencies.
 

