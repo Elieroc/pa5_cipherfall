@@ -10,7 +10,10 @@
       "Read(//tmp/test_drop/chunks/**)",
       "Read(//tmp/test_drop/extracted/**)",
       "Bash(fuser -k 9443/tcp)",
-      "Bash(fuser -k 9444/tcp)"
+      "Bash(fuser -k 9444/tcp)",
+      "Bash(pandoc --version)",
+      "Bash(sudo pacman *)",
+      "Bash(pandoc *)"
     ]
   }
 }
