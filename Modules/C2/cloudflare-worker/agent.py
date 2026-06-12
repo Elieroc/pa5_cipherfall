@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agent.py — Cipherfall C2 Agent
+NullRelay (agent.py) — Cipherfall C2 Agent (Cloudflare Worker channel)
 
 Bake WORKER_URL and C2_PSK into the script before deployment, then obfuscate
 with Modules/Obfuscator/obfuscator_py.py.

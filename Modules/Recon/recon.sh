@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# sysinfo.sh — Collecte d'informations système sur une ligne (séparateur ;)
+# Phantom Eye (recon.sh) — Collecte d'informations système sur une ligne (séparateur ;)
 # Colonnes : Distro;Version;Kernel;SMB_Shares;NFS_Exports;S3_Buckets;
 #            MariaDB_DBs;PostgreSQL_DBs;MongoDB_DBs;GitLab_Version
 # =============================================================================

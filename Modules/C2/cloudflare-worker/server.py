@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-server.py — Cipherfall C2 Server
+NullRelay (server.py) — Cipherfall C2 Server (Cloudflare Worker channel)
 
 Runs entirely behind a firewall. Exposes no public port.
 Communicates with agents exclusively via the Cloudflare Worker dead-drop.

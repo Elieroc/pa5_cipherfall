@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tui.py — Cipherfall C2 Terminal Dashboard
+tui.py — Cipherfall C2 Terminal Dashboard (NullRelay / ClockVenom)
 
 Two-tab interactive TUI:
   Agents  — list active agents, browse task history, dispatch commands.

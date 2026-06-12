@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# obfuscator_v2.sh — Obfuscateur bash avancé (technique unique combinée)
+# ShadowScript (obfuscator_v2.sh) — Obfuscateur bash avancé (technique unique combinée)
 # Usage: ./obfuscator_v2.sh <script.sh>
 # Techniques :
 #   1. Payload   : strip des commentaires (#) et lignes vides, puis gzip + base64 + ROT13

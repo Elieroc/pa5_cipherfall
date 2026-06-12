@@ -1,4 +1,7 @@
 #!/bin/bash
+# =============================================================================
+# EchoErase (delayer.sh) — Injection de délais aléatoires entre les lignes d'un script
+# =============================================================================
 
 INPUT_FILE=$1
 FIXED_DELAY=$2

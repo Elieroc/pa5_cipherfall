@@ -1,5 +1,5 @@
 /*
- * worker.js — Cipherfall Cloudflare Worker (dead-drop relay)
+ * NullRelay (worker.js) — Cipherfall Cloudflare Worker dead-drop relay
  *
  * Role:
  *   Acts as a passive data mule between the C2 server and the agents.

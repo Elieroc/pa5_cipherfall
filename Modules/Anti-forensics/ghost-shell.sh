@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ghost-shell.sh — Session shell furtive, zéro trace d'exécution
+# EchoErase (ghost-shell.sh) — Session shell furtive, zéro trace d'exécution
 # Usage : bash ghost-shell.sh
 # Root recommandé pour couverture complète
 # =============================================================================

