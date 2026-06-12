@@ -150,3 +150,122 @@ Modules/
     ├── echoerase_delayer.sh
     └── echoerase_renamer.py
 ```
+
+---
+
+## Couverture MITRE ATT&CK
+
+### Matrice de couverture
+
+Les colonnes correspondent aux tactiques ATT&CK Enterprise couvertes par le projet.
+
+| Module | Recon | Initial Access | Execution | Priv. Esc. | Defense Evasion | Credential Access | Discovery | C&C | Exfiltration |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Phantom Eye    | —  | —  | —  | —  | —  | —  | ✓  | —  | —  |
+| ShadowScript   | —  | —  | —  | —  | ✓  | —  | —  | —  | —  |
+| NullRelay      | —  | —  | —  | —  | ✓  | —  | —  | ✓  | ✓  |
+| ClockVenom     | —  | —  | —  | —  | ✓  | —  | —  | ✓  | ✓  |
+| ShadowDrop     | —  | —  | ✓  | —  | ✓  | —  | —  | —  | —  |
+| PhantomPage    | —  | ✓  | —  | —  | —  | ✓  | —  | —  | —  |
+| IronVeil       | —  | —  | —  | —  | ✓  | —  | —  | ✓  | —  |
+| EchoErase      | —  | —  | —  | —  | ✓  | —  | —  | —  | —  |
+| Privesc        | —  | —  | —  | ✓  | —  | —  | —  | —  | —  |
+
+**Tactiques non couvertes :** Resource Development (TA0042), Persistence (TA0003), Lateral Movement (TA0008), Collection (TA0009), Impact (TA0040).
+
+---
+
+### Techniques par module
+
+#### Phantom Eye — Discovery (TA0007)
+
+| ID | Technique |
+|---|---|
+| T1082 | System Information Discovery |
+| T1016 | System Network Configuration Discovery |
+| T1049 | System Network Connections Discovery |
+| T1526 | Cloud Service Discovery (buckets S3) |
+| T1087.001 | Account Discovery: Local Account (users DB) |
+
+#### ShadowScript — Defense Evasion (TA0005)
+
+| ID | Technique |
+|---|---|
+| T1027 | Obfuscated Files or Information |
+| T1027.010 | Command Obfuscation (encodage hex des commandes) |
+| T1140 | Deobfuscate/Decode Files or Information (stub runtime) |
+
+#### NullRelay — Command and Control (TA0011) + Exfiltration (TA0010)
+
+| ID | Technique |
+|---|---|
+| T1071.001 | Application Layer Protocol: Web Protocols (HTTPS) |
+| T1102.003 | Web Service: Bidirectional Communication (Cloudflare KV dead-drop) |
+| T1573.001 | Encrypted Channel: Symmetric Cryptography (AES-256-GCM) |
+| T1132.001 | Data Encoding: Standard Encoding (base64 wire format) |
+| T1041 | Exfiltration Over C2 Channel (commande `UPLOAD:`) |
+
+#### ClockVenom — Command and Control (TA0011) + Exfiltration (TA0010)
+
+| ID | Technique |
+|---|---|
+| T1095 | Non-Application Layer Protocol (NTP UDP/123) |
+| T1572 | Protocol Tunneling (NTP dans TCP/443 en fallback) |
+| T1008 | Fallback Channels (UDP/123 → TCP/443) |
+| T1573.001 | Encrypted Channel: Symmetric Cryptography (AES-256-GCM) |
+| T1041 | Exfiltration Over C2 Channel (commande `UPLOAD:`) |
+
+#### ShadowDrop — Execution (TA0002) + Defense Evasion (TA0005)
+
+| ID | Technique |
+|---|---|
+| T1620 | Reflective Code Loading (`memfd_create`, jamais écrit sur disque) |
+| T1059.004 | Command and Scripting Interpreter: Unix Shell |
+| T1059.006 | Command and Scripting Interpreter: Python |
+
+#### PhantomPage — Initial Access (TA0001) + Credential Access (TA0006)
+
+| ID | Technique |
+|---|---|
+| T1566 | Phishing |
+| T1528 | Steal Application Access Token (tokens OAuth Microsoft) |
+| T1111 | Multi-Factor Authentication Interception (bypass device flow 2FA) |
+| T1078 | Valid Accounts (utilisation des tokens capturés) |
+
+#### IronVeil — Defense Evasion (TA0005) + Command and Control (TA0011)
+
+| ID | Technique |
+|---|---|
+| T1014 | Rootkit (LKM, kretprobes) |
+| T1564.001 | Hide Artifacts: Hidden Files and Directories (fichiers préfixe + runtime) |
+| T1601.001 | Modify System Image: Patch System Image (hooks syscall via LKM) |
+| T1565.001 | Data Manipulation: Stored Data Manipulation (injection `/etc/hosts`) |
+| T1036.005 | Masquerading: Match Legitimate Name or Location (trafic NTP légitime) |
+| T1070 | Indicator Removal (filtrage lecture `/etc/hosts` à la volée) |
+
+#### EchoErase — Defense Evasion (TA0005)
+
+| ID | Technique |
+|---|---|
+| T1070.002 | Indicator Removal: Clear Linux or Mac System Logs (utmp/wtmp, lastlog, auditd) |
+| T1070.003 | Indicator Removal: Clear Command History |
+| T1070.006 | Indicator Removal: Timestomp (délais aléatoires bruitent l'analyse temporelle) |
+| T1036.005 | Masquerading: Match Legitimate Name or Location (ghost shell → `[kworker/u:0]`, renamer) |
+
+#### Privesc — Privilege Escalation (TA0004)
+
+| ID | Technique |
+|---|---|
+| T1068 | Exploitation for Privilege Escalation (DirtyFrag CVE, ssh-keysign) |
+| T1548.001 | Abuse Elevation Control Mechanism: Setuid and Setgid (`ssh-keysign` SUID) |
+| T1611 | Escape to Host (Fragnesia — namespace user+network) |
+
+---
+
+### Récapitulatif chiffré
+
+| Métrique | Valeur |
+|---|---|
+| Tactiques couvertes | 7 / 14 |
+| Techniques uniques | 28 |
+| Modules offensifs | 9 |
