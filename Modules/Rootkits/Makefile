@@ -1,4 +1,4 @@
-obj-m += rootkit.o
+obj-m += ironveil.o
 
 KVER  ?= $(shell uname -r)
 KDIR  ?= $(shell \
@@ -20,7 +20,7 @@ clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 
 load:
-	sudo insmod rootkit.ko
+	sudo insmod ironveil.ko
 
 unload:
-	sudo rmmod rootkit
+	sudo rmmod ironveil

