@@ -3,6 +3,12 @@
 # Phantom Eye (recon.sh) — Collecte d'informations système sur une ligne (séparateur ;)
 # Colonnes : Distro;Version;Kernel;SMB_Shares;NFS_Exports;S3_Buckets;
 #            MariaDB_DBs;PostgreSQL_DBs;MongoDB_DBs;GitLab_Version
+#
+# Fallbacks DSM (Synology) :
+#   - Distro/Version : /etc.defaults/VERSION (os_name / productversion)
+#   - SMB            : testparm via /usr/local/packages/@appstore/SMBService/usr/bin/testparm
+#   - MariaDB        : /usr/local/mariadb10/bin/mysql + chemin packages DSM
+#   - NFS            : timeout 5 sur showmount pour éviter blocage
 # =============================================================================
 
 # ---------- helpers ----------------------------------------------------------
@@ -16,6 +22,8 @@ get_distro() {
         # shellcheck source=/dev/null
         source /etc/os-release
         echo "${NAME:-Unknown}"
+    elif [[ -f /etc.defaults/VERSION ]]; then
+        grep -oP '(?<=^os_name=")[^"]+' /etc.defaults/VERSION 2>/dev/null || na
     elif cmd_exists lsb_release; then
         lsb_release -si
     else
@@ -27,6 +35,8 @@ get_version() {
     if [[ -f /etc/os-release ]]; then
         source /etc/os-release
         echo "${VERSION_ID:-${VERSION:-Unknown}}"
+    elif [[ -f /etc.defaults/VERSION ]]; then
+        grep -oP '(?<=^productversion=")[^"]+' /etc.defaults/VERSION 2>/dev/null || na
     elif cmd_exists lsb_release; then
         lsb_release -sr
     else
@@ -41,10 +51,13 @@ get_kernel() {
 
 # ---------- SMB (Samba) shares -----------------------------------------------
 get_smb() {
-    local shares=""
-    # Depuis la config Samba
-    if cmd_exists testparm; then
-        shares=$(testparm -s 2>/dev/null \
+    local shares="" testparm_cmd=""
+    cmd_exists testparm && testparm_cmd="testparm"
+    [[ -z "$testparm_cmd" && -x /usr/local/packages/@appstore/SMBService/usr/bin/testparm ]] \
+        && testparm_cmd=/usr/local/packages/@appstore/SMBService/usr/bin/testparm
+
+    if [[ -n "$testparm_cmd" ]]; then
+        shares=$($testparm_cmd -s 2>/dev/null \
             | awk '/^\[/ && !/^\[(global|printers|print\$)\]/ {
                     gsub(/[\[\]]/,"",$0); printf "%s,", $0 }')
     elif [[ -f /etc/samba/smb.conf ]]; then
@@ -64,7 +77,7 @@ get_nfs() {
             | awk '{print $1}' \
             | paste -sd, -)
     elif cmd_exists showmount; then
-        exports=$(showmount -e localhost 2>/dev/null \
+        exports=$(timeout 5 showmount -e localhost 2>/dev/null \
             | tail -n +2 \
             | awk '{print $1}' \
             | paste -sd, -)
@@ -91,9 +104,13 @@ get_mariadb() {
     local mysql_cmd=""
     cmd_exists mariadb && mysql_cmd="mariadb"
     cmd_exists mysql   && mysql_cmd="${mysql_cmd:-mysql}"
+    for _dsm_path in \
+        /usr/local/mariadb10/bin/mysql \
+        /var/packages/MariaDB10/target/usr/local/mariadb10/bin/mysql; do
+        [[ -z "$mysql_cmd" && -x "$_dsm_path" ]] && mysql_cmd="$_dsm_path"
+    done
 
     if [[ -n "$mysql_cmd" ]]; then
-        # Essaie d'abord sans mot de passe (socket Unix / root local)
         dbs=$($mysql_cmd -N -e "SHOW DATABASES;" 2>/dev/null \
             | grep -viE '^(information_schema|performance_schema|mysql|sys)$' \
             | paste -sd, -)
