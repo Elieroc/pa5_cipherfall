@@ -66,7 +66,7 @@ bash Modules/Privesc/fragnesia.sh
 
 Full attack pipeline: recon target → obfuscate payload → drop via fileless dropper → beacon to C2 via Cloudflare dead-drop → escalate privileges → persist with rootkit → cover tracks with anti-forensics.
 
-**Phantom Eye** (`phantom_eye.sh`): Collects system fingerprint data using only built-in tools and standard binaries (`testparm`, `aws`, `psql`, `mongosh`, `gitlab-rake`, etc.). Falls back gracefully to `N/A` for each unavailable data source. Output is always exactly one line: `Distro;Version;Kernel;SMB_Shares;NFS_Exports;S3_Buckets;MariaDB_DBs;PostgreSQL_DBs;MongoDB_DBs;GitLab_Version`.
+**Phantom Eye** (`phantom_eye.sh`): Collects system fingerprint data using only built-in tools and standard binaries (`testparm`, `aws`, `psql`, `mongosh`, `gitlab-rake`, etc.). Falls back gracefully to `N/A` for each unavailable data source. Output is always exactly one line: `Distro;Version;Kernel;SMB_Shares;NFS_Exports;S3_Buckets;MariaDB_DBs;PostgreSQL_DBs;MongoDB_DBs;GitLab_Version`. DSM-specific fallbacks: Distro/Version from `/etc.defaults/VERSION` (`os_name`/`productversion` fields); SMB shares via `/usr/local/packages/@appstore/SMBService/usr/bin/testparm` (standard `testparm` absent from PATH on DSM); MariaDB via `/usr/local/mariadb10/bin/mysql` or `/var/packages/MariaDB10/target/usr/local/mariadb10/bin/mysql`; `showmount` wrapped in `timeout 5` to prevent blocking.
 
 **ShadowScript** (`shadowscript.sh`, `shadowscript.py`): Stacks gzip → base64 → ROT13, then splits into variable-size chunks, shuffles chunk definition order (Fisher-Yates), encodes all command names in hex (`$'\x..'`) or chr() sequences, and injects decoy variables from a hardcoded fake-pool. The final stub never contains any readable string like `eval`, `base64`, or `gunzip`.
 
@@ -111,6 +111,25 @@ _Limitations:_ task lost if agent crashes after GET before PUT result (re-queue 
 **EchoErase — delayer** (`echoerase_delayer.sh`): Injects `sleep <N>` after each substantive line, skipping comments, blank lines, backslash/pipe continuations, and shell control keywords. Delay randomized via awk with nanosecond seed.
 
 **EchoErase — renamer** (`echoerase_renamer.py`): Renames files using base64 URL-safe stem encoding (RFC 4648 §5, no padding, reversible via `--view`). `--no-recover`: random 6-char alphanumeric stem (CSPRNG, irreversible). `--ext`: replaces extension with a plausible alternative from a family table. All modes combinable except `--view` + `--ext`.
+
+## Test environments
+
+**Synology DSM VM** (`192.168.5.44`): DSM 7.2.2-72806, kernel 4.4.302+. Used to validate Phantom Eye DSM fallbacks and enumerate LOLBins. Credentials stored separately, not in this file.
+
+_Key DSM paths:_
+- Version info: `/etc.defaults/VERSION`
+- SMB config: `/etc/samba/smb.conf` (shares not visible via grep — use testparm below)
+- SMB testparm: `/usr/local/packages/@appstore/SMBService/usr/bin/testparm`
+- smbd binary: `/usr/local/packages/@appstore/SMBService/usr/sbin/smbd`
+- MariaDB (if installed via Package Center): `/usr/local/mariadb10/bin/mysql` or `/var/packages/MariaDB10/target/usr/local/mariadb10/bin/mysql`
+- Syno backup tool: `/usr/syno/bin/synobackup`
+- Shared folder sync: `/usr/syno/bin/s2s_syncer <task_id>`
+- Syno copy utility: `/usr/syno/bin/synocopy`
+
+_LOLBins confirmed present on DSM 7.2.2 (usable for exfil without pip):_
+`curl`, `wget`, `python3` (3.8.15), `python` (2.x), `php`, `openssl` (1.1.1u), `ssh`, `scp`, `sftp`, `rsync`, `base64`, `xxd`, `od`, `gzip`, `bzip2`, `tar`, `dd`, `cat`, `tee`, `awk`, `sed`
+
+_Backup LOLBins (trafic légitime):_ `synobackup` (Hyper Backup, nécessite tâche préconfigurée), `s2s_syncer` (Shared Folder Sync, nécessite tâche préconfigurée), `rsync`/`scp` (standards, aucune config).
 
 ## Coding conventions
 
