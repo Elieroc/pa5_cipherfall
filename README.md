@@ -269,3 +269,82 @@ Les colonnes correspondent aux tactiques ATT&CK Enterprise couvertes par le proj
 | Tactiques couvertes | 7 / 14 |
 | Techniques uniques | 28 |
 | Modules offensifs | 9 |
+
+## Ressources
+Voici différents articles qui nous ont aidé dans nos recherches pour le projet :
+- [Cloudflare Worker C2](https://cgomezsec.com/blog/securing-c2-for-rt-operations-using-cloudflare)
+- [NTP C2](https://github.com/d3adzo/mesa)
+- [Rootkit](https://github.com/MatheuZSecurity/Singularity)
+- [Dropper](https://en.wikipedia.org/wiki/Dropper_(malware))
+- [Obfuscation](https://any.run/cybersecurity-blog/6-common-obfuscation-methods-in-malware/)
+- [Phishing](https://www.it-connect.fr/microsoft-365-le-kit-de-phishing-kali365-pirate-les-comptes-sans-voler-les-mots-de-passe/)
+- [Privesc](https://www.it-connect.fr/dirty-frag-cette-faille-zero-day-donne-les-droits-root-sur-linux/)
+
+## Coûts
+
+### R&D
+
+Les estimations sont approximatives : une partie des techniques était déjà connue avant le projet, d'autres ont nécessité de la recherche spécifique, certaines ont été inventées pour coller aux contraintes (ex. NTP C2 sous 203 octets).
+
+| Poste | Détail | Heures | Taux | Coût |
+|---|---|---:|---:|---:|
+| Recherche et veille | CVE, protocoles, techniques ATT&CK, outils existants | 20 h | 100 €/h | **2 000 €** |
+
+---
+
+### Développement
+
+Estimé à partir de l'analyse des commits GitHub, du volume de code par module (~6 400 lignes) et du temps de test en conditions réelles (VPS + VM Debian). L'abonnement Claude est inclus car l'IA a contribué au développement.
+
+| Poste | Détail | Heures | Taux | Coût |
+|---|---|---:|---:|---:|
+| Développement | 9 modules offensifs + TUI + documentation | 175 h | 143 €/h | **25 000 €** |
+| Outillage IA | Abonnement Claude (3 mois) | — | — | **33 €** |
+
+Répartition estimée par module :
+
+| Module | Complexité | Heures estimées |
+|---|---|---:|
+| IronVeil (rootkit LKM) | ★★★★★ | ~35 h |
+| NullRelay (C2 Cloudflare) | ★★★★ | ~25 h |
+| ClockVenom (C2 NTP) | ★★★★ | ~22 h |
+| ShadowScript (obfuscateur) | ★★★ | ~12 h |
+| EchoErase (anti-forensics) | ★★★ | ~13 h |
+| TUI + operator_cli | ★★★ | ~10 h |
+| Privesc (3 exploits) | ★★★ | ~15 h |
+| PhantomPage (phishing) | ★★★ | ~7 h |
+| ShadowDrop (dropper) | ★★ | ~5 h |
+| Phantom Eye (recon) | ★★ | ~5 h |
+| Documentation + déploiement | ★ | ~16 h |
+| **Total** | | **~175 h** |
+
+---
+
+### Infrastructure
+
+Le projet privilégie l'infrastructure publique et gratuite (Cloudflare, Let's Encrypt) pour minimiser les coûts et l'exposition. Seuls le VPS NTP C2 et le nom de domaine phishing engendrent des coûts réels.
+
+| Composant | Usage | Fournisseur | Coût annuel |
+|---|---|---|---:|
+| VPS Linux (IP publique, root) | ClockVenom — serveur NTP C2 + hébergement payloads | Hetzner / OVH | ~60 €/an |
+| Cloudflare Workers + KV | NullRelay — dead-drop C2 | Cloudflare | **0 €** *(free tier)* |
+| Nom de domaine | PhantomPage — crédibilité phishing | OVH / Namecheap | ~12 €/an |
+| Certificat SSL | PhantomPage — HTTPS | Let's Encrypt | **0 €** |
+| **Total infrastructure** | | | **~72 €/an** |
+
+> Le free tier Cloudflare Workers couvre 100 000 requêtes/jour et 100 000 lectures KV/jour — largement suffisant pour un usage opérationnel.
+
+---
+
+### Récapitulatif et prix de vente
+
+| Poste | Coût |
+|---|---:|
+| R&D | 2 000 € |
+| Développement | 25 033 € |
+| Infrastructure (1 an) | 72 € |
+| **Coût total projet** | **~27 105 €** |
+
+En tenant compte des coûts totaux, des taxes et d'une marge commerciale raisonnable, le prix de vente estimé du produit est de **30 000 €**.
+
+> L'infrastructure représente moins de 0,3 % du coût total — l'essentiel de la valeur est dans l'expertise et le développement.
