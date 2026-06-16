@@ -307,11 +307,14 @@ def _agent_id() -> str:
 
 def _sysinfo() -> dict:
     return {
-        "hostname": platform.node(),
-        "os":       platform.system(),
-        "release":  platform.release(),
-        "user":     os.environ.get("USER") or os.environ.get("USERNAME", "?"),
-        "cwd":      os.getcwd(),
+        "hostname":   platform.node(),
+        "os":         platform.system(),
+        "release":    platform.release(),
+        "user":       os.environ.get("USER") or os.environ.get("USERNAME", "?"),
+        "cwd":        os.getcwd(),
+        "relay_port": RELAY_PORT,
+        "worker_url": WORKER_URL,
+        "beacon_int": BEACON_INT,
     }
 
 

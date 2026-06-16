@@ -22,7 +22,7 @@ from rich.text import Text
 from dotenv import load_dotenv
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Button, DataTable, Footer, Header, Input,
     Label, RichLog, Select, Static, Switch, TabbedContent, TabPane,
@@ -116,6 +116,113 @@ def _obfuscate(agent_path: pathlib.Path) -> pathlib.Path:
 
 
 
+def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
+                relay_url: str = "", dead: bool = False) -> None:
+    dot   = "✗" if dead else "●"
+    dot_s = "dim red" if dead else ("yellow bold" if tag == "RELAY" else "bright_green bold")
+    name_s = "dim white" if dead else "bold white"
+    t.append(f"{dot} ", style=dot_s)
+    t.append(a.get("label") or "—", style=name_s)
+    t.append(f"  [{a['id'][:8]}]", style="dim")
+    t.append(f"  {info.get('user','?')}@{info.get('hostname','?')}", style="dim white")
+    if tag == "RELAY":
+        t.append(f"  [RELAY :{info.get('relay_port','?')}]", style="yellow bold")
+    elif relay_url:
+        t.append(f"  [via {relay_url}]", style="cyan")
+    t.append(f"  {_ago(a['last_seen'])}", style="dim")
+
+
+def _build_graph(agents: list, worker_url: str, admin_port: str) -> Text:
+    now  = int(time.time())
+    wurl = worker_url.rstrip("/")
+    t    = Text()
+
+    dead: list  = []
+    layer1: list = []        # (agent, info, children_list)
+    relay_by_port: dict = {} # port -> layer1 index
+    orphans: list = []       # isolated agents, matched later
+
+    for a in agents:
+        info = json.loads(a.get("sysinfo") or "{}")
+        bi   = info.get("beacon_int", 30)
+        if now - a["last_seen"] > bi * 5:
+            dead.append((a, info))
+            continue
+        rport = info.get("relay_port", 0)
+        awurl = info.get("worker_url", "").rstrip("/")
+        if rport > 0:
+            idx = len(layer1)
+            layer1.append((a, info, []))
+            relay_by_port[rport] = idx
+        elif awurl and awurl != wurl:
+            orphans.append((a, info, awurl))
+        else:
+            layer1.append((a, info, []))
+
+    for a, info, awurl in orphans:
+        try:
+            port = int(awurl.rstrip("/").rsplit(":", 1)[-1])
+        except Exception:
+            port = -1
+        idx = relay_by_port.get(port)
+        if idx is not None:
+            layer1[idx][2].append((a, info, awurl))
+        else:
+            layer1.append((a, info, []))
+
+    t.append("● ", style="bold cyan")
+    t.append("C2 SERVER", style="bold cyan")
+    t.append(f"  127.0.0.1:{admin_port}\n", style="dim cyan")
+
+    n = len(layer1)
+    for i, (a, info, children) in enumerate(layer1):
+        is_last   = (i == n - 1)
+        v_char    = " " if is_last else "│"
+        p_char    = "└" if is_last else "├"
+        is_relay  = info.get("relay_port", 0) > 0
+        link_s    = "yellow" if is_relay else "bright_green"
+
+        t.append(f"{p_char}─── ", style=link_s)
+        _agent_line(t, a, info, tag="RELAY" if is_relay else "")
+        t.append("\n")
+
+        nc = len(children)
+        for j, (ia, iinfo, awurl) in enumerate(children):
+            is_last_c = j == nc - 1
+            t.append(f"{v_char}   ┊\n", style="dim cyan")
+            cp = "└" if is_last_c else "├"
+            t.append(f"{v_char}   {cp}╌╌╌ ", style="dim cyan")
+            _agent_line(t, ia, iinfo, relay_url=awurl)
+            t.append("\n")
+
+    if dead:
+        t.append("\n")
+        t.append("─" * 46 + " DEAD\n", style="dim red")
+        for a, info in dead:
+            t.append("  ")
+            _agent_line(t, a, info, dead=True)
+            t.append("\n")
+
+    t.append("\n")
+    t.append("─── ", style="bright_green")
+    t.append("direct  ", style="dim white")
+    t.append("┊╌╌╌ ", style="dim cyan")
+    t.append("relay  ", style="dim white")
+    t.append("✗ ", style="dim red")
+    t.append("dead", style="dim white")
+
+    return t
+
+
+class GraphPane(Static):
+    def update_graph(self, agents: list) -> None:
+        self.update(_build_graph(
+            agents,
+            _DEFAULT_URL,
+            os.environ.get("C2_ADMIN_PORT", "1337"),
+        ))
+
+
 CSS = """
 Screen { background: #0d1117; }
 
@@ -159,6 +266,15 @@ TabbedContent > TabPane { padding: 0; height: 1fr; }
 #btn-generate  { width: 72; margin-top: 1; }
 #payload-status { padding: 1 1; height: 3; }
 #row-url { height: 3; margin-bottom: 1; }
+
+/* ── Graphe tab ── */
+#graph-scroll {
+    height: 1fr;
+    padding: 1 2;
+}
+GraphPane {
+    height: auto;
+}
 
 /* ── Shared ── */
 Label {
@@ -210,6 +326,10 @@ class CipherfallTUI(App):
                             yield Label(" OUTPUT")
                             yield RichLog(id="output-log", highlight=True, markup=True)
                     yield Input(placeholder="select an agent first", id="cmd-input")
+
+            with TabPane("Graphe", id="tab-graph"):
+                with VerticalScroll(id="graph-scroll"):
+                    yield GraphPane(id="graph-pane")
 
             with TabPane("Payload", id="tab-payload"):
                 with Vertical(id="payload-outer"):
@@ -289,6 +409,11 @@ class CipherfallTUI(App):
                 Text(str(n), style="yellow") if n else Text("—", style="dim"),
                 key=a["id"],
             )
+
+        try:
+            self.query_one("#graph-pane", GraphPane).update_graph(agents)
+        except Exception:
+            pass
 
         if self._selected_agent:
             await self._load_tasks(self._selected_agent)

