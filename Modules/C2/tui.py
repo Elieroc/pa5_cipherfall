@@ -33,6 +33,7 @@ load_dotenv()
 
 BASE         = f"http://127.0.0.1:{os.environ.get('C2_ADMIN_PORT', '1337')}"
 _DEFAULT_URL = os.environ.get("WORKER_URL", "").rstrip("/")
+_C2_HOST     = os.environ.get("C2_HOST", "127.0.0.1")
 _DEFAULT_PSK = os.environ.get("C2_PSK", "")
 TASK_COLORS  = {"done": "green", "sent": "yellow", "pending": "red"}
 HERE         = pathlib.Path(__file__).parent
@@ -132,7 +133,7 @@ def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
     t.append(f"  {_ago(a['last_seen'])}", style="dim")
 
 
-def _build_graph(agents: list, worker_url: str, admin_port: str) -> Text:
+def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = "127.0.0.1") -> Text:
     now  = int(time.time())
     wurl = worker_url.rstrip("/")
     t    = Text()
@@ -172,7 +173,7 @@ def _build_graph(agents: list, worker_url: str, admin_port: str) -> Text:
 
     t.append("● ", style="bold cyan")
     t.append("C2 SERVER", style="bold cyan")
-    t.append(f"  127.0.0.1:{admin_port}\n", style="dim cyan")
+    t.append(f"  {c2_host}:{admin_port}\n", style="dim cyan")
 
     n = len(layer1)
     for i, (a, info, children) in enumerate(layer1):
@@ -220,6 +221,7 @@ class GraphPane(Static):
             agents,
             _DEFAULT_URL,
             os.environ.get("C2_ADMIN_PORT", "1337"),
+            _C2_HOST,
         ))
 
 

