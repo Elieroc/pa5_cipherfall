@@ -18,6 +18,7 @@ Keys:
 """
 
 import asyncio, json, os, pathlib, re, subprocess, sys, time
+from rich.markup import escape as _escape
 from rich.text import Text
 from dotenv import load_dotenv
 from textual.app import App, ComposeResult
@@ -488,7 +489,7 @@ class CipherfallTUI(App):
         log.clear()
         log.write(f"[bold cyan]$ {task['command']}[/bold cyan]")
         if task.get("output"):
-            log.write(task["output"])
+            log.write(_escape(task["output"]))
         else:
             log.write("[dim]waiting for output…[/dim]")
 
