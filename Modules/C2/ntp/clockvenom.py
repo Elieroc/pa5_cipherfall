@@ -402,8 +402,10 @@ def _module_relay(args):
 
 def _module_heartbeat(args) -> str:
     global BEACON_INT, JITTER
+    if args and args[0] == "status":
+        return f"[heartbeat: {BEACON_INT}s ±{JITTER}s]"
     if len(args) < 2:
-        return "[usage: /module heartbeat INT JITTER]"
+        return "[usage: /module heartbeat INT JITTER | status]"
     try:
         new_int    = int(args[0])
         new_jitter = int(args[1])
