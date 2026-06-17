@@ -400,6 +400,24 @@ def _module_relay(args):
     return f"[unknown relay subcommand: {args[0]}]"
 
 
+def _module_heartbeat(args) -> str:
+    global BEACON_INT, JITTER
+    if len(args) < 2:
+        return "[usage: /module heartbeat INT JITTER]"
+    try:
+        new_int    = int(args[0])
+        new_jitter = int(args[1])
+    except ValueError:
+        return "[error: INT and JITTER must be integers]"
+    if new_int < 1:
+        return "[error: INT must be >= 1]"
+    if new_jitter < 0:
+        return "[error: JITTER must be >= 0]"
+    BEACON_INT = new_int
+    JITTER     = new_jitter
+    return f"[heartbeat: {BEACON_INT}s ±{JITTER}s]"
+
+
 def _exec(cmd):
     if cmd.startswith("/module "):
         parts = cmd[8:].split()
@@ -407,6 +425,8 @@ def _exec(cmd):
             return "[usage: /module relay start <port> <host:port> | stop | status]"
         if parts[0] == "relay":
             return _module_relay(parts[1:])
+        if parts[0] == "heartbeat":
+            return _module_heartbeat(parts[1:])
         return f"[unknown module: {parts[0]}]"
     if cmd.startswith("UPLOAD:"):
         try:
