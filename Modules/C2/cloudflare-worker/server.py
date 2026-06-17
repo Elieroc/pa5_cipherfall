@@ -113,14 +113,19 @@ def _init_db():
                 sysinfo    TEXT
             );
             CREATE TABLE IF NOT EXISTS tasks (
-                id         TEXT PRIMARY KEY,
-                agent_id   TEXT NOT NULL,
-                command    TEXT NOT NULL,
-                status     TEXT NOT NULL DEFAULT 'pending',
-                created_at INTEGER NOT NULL,
-                output     TEXT
+                id           TEXT PRIMARY KEY,
+                agent_id     TEXT NOT NULL,
+                command      TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                created_at   INTEGER NOT NULL,
+                output       TEXT,
+                completed_at INTEGER
             );
         """)
+        try:
+            con.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER")
+        except Exception:
+            pass
 
 
 # ── background loops ───────────────────────────────────────────────────────────
@@ -147,8 +152,8 @@ async def _fetch_result(client: httpx.AsyncClient, task_id: str):
         if r.status_code == 200:
             payload = _decrypt(r.text)
             with _db() as con:
-                con.execute("UPDATE tasks SET status='done', output=? WHERE id=?",
-                            (payload.get("output", ""), task_id))
+                con.execute("UPDATE tasks SET status='done', output=?, completed_at=? WHERE id=?",
+                            (payload.get("output", ""), int(time.time()), task_id))
     except Exception:
         pass
 
@@ -252,7 +257,7 @@ async def create_task(request: Request):
         raise HTTPException(status_code=400)
     task_id = str(uuid.uuid4())
     with _db() as con:
-        con.execute("INSERT INTO tasks VALUES (?,?,?,'pending',?,NULL)",
+        con.execute("INSERT INTO tasks VALUES (?,?,?,'pending',?,NULL,NULL)",
                     (task_id, agent_id, command, int(time.time())))
     return {"task_id": task_id}
 

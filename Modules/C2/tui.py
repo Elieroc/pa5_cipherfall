@@ -470,7 +470,7 @@ class CipherfallTUI(App):
             "", "ID", "Label", "Last seen", "User@Host", "Pending"
         )
         self.query_one("#tasks-table", DataTable).add_columns(
-            "ID", "Command", "Status", "Time"
+            "ID", "Command", "Status", "Sent", "Received"
         )
         # relay switch shown for all agent types; host row only for NTP
         self.query_one("#row-relay").display      = True
@@ -566,6 +566,7 @@ class CipherfallTUI(App):
                 (cmd[:30] + "…") if len(cmd) > 30 else cmd,
                 Text(task["status"], style=TASK_COLORS.get(task["status"], "white")),
                 _ts(task["created_at"]),
+                _ts(task["completed_at"]) if task.get("completed_at") else "—",
                 key=task["id"],
             )
 
