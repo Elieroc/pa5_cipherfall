@@ -870,7 +870,7 @@ class CipherfallTUI(App):
                 if do_renamer:
                     log.write("[yellow]applying echoerase_renamer…[/yellow]")
                     r = subprocess.run(
-                        ["python3", str(ren_path), "--no-recover", "--ext", str(tmp)],
+                        ["python3", str(ren_path), "--no-recover", "--ext", "--hide", str(tmp)],
                         capture_output=True, text=True
                     )
                     if "→" in r.stdout:

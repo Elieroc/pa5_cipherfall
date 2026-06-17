@@ -2,11 +2,13 @@
 # =============================================================================
 # EchoErase (renamer.py) — Renommage anti-forensique de fichiers par encodage base64
 # Usage:
-#   python3 renamer.py <fichier>                       → stem en base64 URL-safe
-#   python3 renamer.py --view <fichier>                → affiche le nom d'origine
-#   python3 renamer.py --no-recover <fichier>          → stem de 6 chars aléatoires
-#   python3 renamer.py --ext <fichier>                 → extension aléatoire valide
-#   python3 renamer.py --no-recover --ext <fichier>    → stem aléatoire + ext aléatoire
+#   python3 renamer.py <fichier>                              → stem en base64 URL-safe
+#   python3 renamer.py --view <fichier>                       → affiche le nom d'origine
+#   python3 renamer.py --no-recover <fichier>                 → stem de 6 chars aléatoires
+#   python3 renamer.py --ext <fichier>                        → extension aléatoire valide
+#   python3 renamer.py --no-recover --ext <fichier>           → stem aléatoire + ext aléatoire
+#   python3 renamer.py --hide <fichier>                       → préfixe '.' (fichier caché)
+#   python3 renamer.py --no-recover --ext --hide <fichier>    → tout combiné
 # =============================================================================
 # Technique :
 #   Mode par défaut : le stem du fichier (nom sans extension) est encodé en
@@ -24,10 +26,15 @@
 #   choisie (.tmp, .bak, .dat…). Combinable avec --no-recover. Incompatible avec
 #   --view (qui n'effectue aucun renommage).
 #
+#   Option --hide : préfixe le nom final avec '.' pour rendre le fichier caché sur
+#   les systèmes POSIX (ls sans -a ne l'affiche pas). Combinable avec toutes les
+#   autres options sauf --view.
+#
 #   Exemples :
 #     recon.sh      →  cmVjb24.sh            (défaut)
 #     recon.sh      →  cmVjb24.bash          (défaut + --ext)
 #     recon.sh      →  k9Xp2T.env            (--no-recover + --ext)
+#     recon.sh      →  .k9Xp2T.env           (--no-recover + --ext + --hide)
 #     payload.py    →  cGF5bG9hZA.pyc        (défaut + --ext)
 #
 # Limitations :
@@ -128,10 +135,17 @@ def main() -> None:
         action="store_true",
         help="Remplace l'extension par une extension liée au type du fichier (aléatoire)",
     )
+    parser.add_argument(
+        "--hide",
+        action="store_true",
+        help="Préfixe le nom final avec '.' pour rendre le fichier caché (POSIX)",
+    )
     args = parser.parse_args()
 
     if args.ext and args.view:
         parser.error("--ext ne peut pas être utilisé avec --view")
+    if args.hide and args.view:
+        parser.error("--hide ne peut pas être utilisé avec --view")
 
     path = args.file
 
@@ -154,7 +168,7 @@ def main() -> None:
 
     new_ext = random_ext(ext) if args.ext else ext
     new_stem = random_stem() if args.no_recover else encode_stem(stem)
-    new_name = new_stem + new_ext
+    new_name = ("." if args.hide else "") + new_stem + new_ext
     new_path = os.path.join(directory, new_name)
     os.rename(path, new_path)
     print(f"{basename}  →  {new_name}")
