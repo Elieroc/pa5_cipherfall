@@ -472,6 +472,12 @@ class CipherfallTUI(App):
                 key=a["id"],
             )
 
+        if self._selected_agent:
+            for i, row_key in enumerate(t.rows):
+                if str(row_key.value) == self._selected_agent:
+                    t.move_cursor(row=i, animate=False)
+                    break
+
         try:
             self.query_one("#graph-pane", GraphPane).update_graph(agents)
         except Exception:
