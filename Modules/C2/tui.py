@@ -140,20 +140,51 @@ def _obfuscate(agent_path: pathlib.Path) -> pathlib.Path:
 
 
 
+def _freshness_style(last_seen: int, beacon_int: int = 30) -> str:
+    age = int(time.time()) - last_seen
+    if age < beacon_int * 2:
+        return "bright_green"
+    if age < beacon_int * 5:
+        return "yellow"
+    return "red"
+
+
 def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
                 relay_url: str = "", dead: bool = False) -> None:
-    dot   = "✗" if dead else "●"
-    dot_s = "dim red" if dead else ("yellow bold" if tag == "RELAY" else "bright_green bold")
-    name_s = "dim white" if dead else "bold white"
-    t.append(f"{dot} ", style=dot_s)
-    t.append(a.get("label") or "—", style=name_s)
-    t.append(f"  [{a['id'][:8]}]", style="dim")
+    atype = "cf" if info.get("worker_url") else "ntp"
+    bi    = info.get("beacon_int", 30)
+
+    if dead:
+        t.append("✗ ", style="dim red")
+        t.append(f"{(a.get('label') or '—'):<14}", style="dim")
+        t.append(f"[{a['id'][:8]}]", style="dim")
+        t.append(f"  {'CF ' if atype == 'cf' else 'NTP'}", style="dim")
+        t.append(f"  {info.get('user','?')}@{info.get('hostname','?')}", style="dim")
+        t.append(f"  {_ago(a['last_seen'])}", style="dim red")
+        return
+
+    if tag == "RELAY":
+        dot_s  = "yellow bold"
+        type_s = "yellow bold"
+    elif atype == "cf":
+        dot_s  = "bright_cyan bold"
+        type_s = "bold cyan"
+    else:
+        dot_s  = "bright_yellow bold"
+        type_s = "bold yellow"
+
+    type_l = " CF " if atype == "cf" else " NTP"
+
+    t.append("◆ ", style=dot_s)
+    t.append(f"{(a.get('label') or '—'):<14}", style="bold white")
+    t.append(f"[{a['id'][:8]}]", style="dim")
+    t.append(f"  {type_l}", style=type_s)
     t.append(f"  {info.get('user','?')}@{info.get('hostname','?')}", style="dim white")
     if tag == "RELAY":
-        t.append(f"  [RELAY :{info.get('relay_port','?')}]", style="yellow bold")
+        t.append(f"  ⇄ RELAY :{info.get('relay_port','?')}", style="yellow bold")
     elif relay_url:
-        t.append(f"  [via {relay_url}]", style="cyan")
-    t.append(f"  {_ago(a['last_seen'])}", style="dim")
+        t.append(f"  ↪ {relay_url}", style="dim cyan")
+    t.append(f"  {_ago(a['last_seen'])}", style=_freshness_style(a["last_seen"], bi))
 
 
 def _url_host(url: str) -> str:
@@ -168,10 +199,10 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
     wurl = worker_url.rstrip("/")
     t    = Text()
 
-    dead: list  = []
-    layer1: list = []        # (agent, info, children_list)
-    relay_by_host: dict = {} # relay_host IP -> layer1 index
-    orphans: list = []
+    dead: list       = []
+    layer1: list     = []
+    relay_by_host: dict = {}
+    orphans: list    = []
 
     for a in agents:
         info = json.loads(a.get("sysinfo") or "{}")
@@ -179,10 +210,10 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
         if now - a["last_seen"] > max(bi * 5, 30):
             dead.append((a, info))
             continue
-        rport  = info.get("relay_port", 0)
-        rhost  = info.get("relay_host", "")
-        awurl  = info.get("worker_url", "").rstrip("/")
-        ahost  = _url_host(awurl)
+        rport = info.get("relay_port", 0)
+        rhost = info.get("relay_host", "")
+        awurl = info.get("worker_url", "").rstrip("/")
+        ahost = _url_host(awurl)
         if rport > 0:
             idx = len(layer1)
             layer1.append((a, info, []))
@@ -201,46 +232,74 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
         else:
             layer1.append((a, info, []))
 
-    t.append("● ", style="bold cyan")
-    t.append("C2 SERVER", style="bold cyan")
-    t.append(f"  {c2_host}:{admin_port}\n", style="dim cyan")
+    n_active = len(layer1)
+    n_dead   = len(dead)
+    BOX_W    = 52
+
+    t.append("╭" + "─" * (BOX_W - 2) + "╮\n", style="bold cyan")
+    t.append("│  ", style="bold cyan")
+    t.append("◉  C2 SERVER", style="bold white")
+    server_detail = f"  {c2_host}:{admin_port}"
+    t.append(server_detail, style="dim cyan")
+    pad = BOX_W - 2 - 2 - len("◉  C2 SERVER") - len(server_detail)
+    t.append(" " * max(pad, 0))
+    t.append("│\n", style="bold cyan")
+    t.append("│  ", style="bold cyan")
+    stat_str  = f"{n_active} active"
+    dead_str  = f"  ·  {n_dead} offline" if n_dead else ""
+    t.append(stat_str, style="bright_green" if n_active else "dim")
+    t.append(dead_str, style="dim yellow" if n_dead else "dim")
+    pad2 = BOX_W - 2 - 2 - len(stat_str) - len(dead_str)
+    t.append(" " * max(pad2, 0))
+    t.append("│\n", style="bold cyan")
+    t.append("╰" + "─" * (BOX_W - 2) + "╯\n", style="bold cyan")
+
+    if not layer1 and not dead:
+        t.append("\n  no agents registered\n", style="dim")
+        return t
+
+    t.append("\n")
 
     n = len(layer1)
     for i, (a, info, children) in enumerate(layer1):
-        is_last   = (i == n - 1)
-        v_char    = " " if is_last else "│"
-        p_char    = "└" if is_last else "├"
-        is_relay  = info.get("relay_port", 0) > 0
-        link_s    = "yellow" if is_relay else "bright_green"
+        is_last  = (i == n - 1)
+        v_char   = " " if is_last else "│"
+        p_char   = "└" if is_last else "├"
+        is_relay = info.get("relay_port", 0) > 0
+        link_s   = "yellow" if is_relay else "bright_cyan"
 
-        t.append(f"{p_char}─── ", style=link_s)
+        t.append(f"{p_char}── ", style=link_s)
         _agent_line(t, a, info, tag="RELAY" if is_relay else "")
         t.append("\n")
 
         nc = len(children)
         for j, (ia, iinfo, awurl) in enumerate(children):
             is_last_c = j == nc - 1
-            t.append(f"{v_char}   ┊\n", style="dim cyan")
+            t.append(f"{v_char}   │\n", style="dim cyan")
             cp = "└" if is_last_c else "├"
-            t.append(f"{v_char}   {cp}╌╌╌ ", style="dim cyan")
+            t.append(f"{v_char}   {cp}╌╌ ", style="dim cyan")
             _agent_line(t, ia, iinfo, relay_url=awurl)
             t.append("\n")
 
     if dead:
         t.append("\n")
-        t.append("─" * 46 + " DEAD\n", style="dim red")
+        sep = "╌" * 14 + f" OFFLINE ({n_dead}) " + "╌" * 14
+        t.append(sep + "\n", style="dim red")
+        t.append("\n")
         for a, info in dead:
             t.append("  ")
             _agent_line(t, a, info, dead=True)
             t.append("\n")
 
     t.append("\n")
-    t.append("─── ", style="bright_green")
-    t.append("direct  ", style="dim white")
-    t.append("┊╌╌╌ ", style="dim cyan")
-    t.append("relay  ", style="dim white")
-    t.append("✗ ", style="dim red")
-    t.append("dead", style="dim white")
+    t.append("  ◆ ", style="bright_cyan bold")
+    t.append("CF", style="bold cyan")
+    t.append("   ◆ ", style="bright_yellow bold")
+    t.append("NTP", style="bold yellow")
+    t.append("   ◆ ", style="yellow bold")
+    t.append("relay", style="yellow")
+    t.append("   ✗ ", style="dim red")
+    t.append("offline", style="dim white")
 
     return t
 
@@ -323,7 +382,7 @@ TabbedContent > TabPane { padding: 0; height: 1fr; }
 /* ── Graphe tab ── */
 #graph-scroll {
     height: 1fr;
-    padding: 1 2;
+    padding: 2 4;
 }
 GraphPane {
     height: auto;
