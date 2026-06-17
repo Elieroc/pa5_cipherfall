@@ -151,7 +151,7 @@ def _freshness_style(last_seen: int, beacon_int: int = 30) -> str:
 
 def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
                 relay_url: str = "", dead: bool = False) -> None:
-    atype = "cf" if info.get("worker_url") else "ntp"
+    atype = "cf" if info.get("worker_url", "").startswith("http") else "ntp"
     bi    = info.get("beacon_int", 30)
 
     if dead:
@@ -334,12 +334,13 @@ class ConfirmModal(ModalScreen):
 
 
 class GraphPane(Static):
-    def update_graph(self, agents: list) -> None:
+    def update_graph(self, agents: list, ports: list | None = None) -> None:
+        port_str = ",".join(ports or _ports)
         self.update(_build_graph(
             agents,
             _DEFAULT_URL,
-            os.environ.get("C2_ADMIN_PORT", "1337"),
-            _C2_HOST,
+            port_str,
+            "127.0.0.1",
         ))
 
 
