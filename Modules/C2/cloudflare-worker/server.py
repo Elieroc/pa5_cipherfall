@@ -262,6 +262,11 @@ async def delete_agent(agent_id: str):
     with _db() as con:
         con.execute("DELETE FROM tasks  WHERE agent_id=?", (agent_id,))
         con.execute("DELETE FROM agents WHERE id=?",       (agent_id,))
+    async with httpx.AsyncClient(headers=_WORKER_HDR, timeout=5.0) as c:
+        try:
+            await c.delete(f"{WORKER_URL}/hb/{agent_id}")
+        except Exception:
+            pass
     return {"status": "ok"}
 
 

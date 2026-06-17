@@ -322,17 +322,17 @@ Répartition estimée par module :
 
 ### Infrastructure
 
-Le projet privilégie l'infrastructure publique et gratuite (Cloudflare, Let's Encrypt) pour minimiser les coûts et l'exposition. Seuls le VPS NTP C2 et le nom de domaine phishing engendrent des coûts réels.
+Le projet privilégie l'infrastructure publique et gratuite (Cloudflare, Let's Encrypt) pour minimiser les coûts et l'exposition. Seuls le VPS du C2 et le nom de domaine phishing engendrent des coûts réels.
 
 | Composant | Usage | Fournisseur | Coût annuel |
 |---|---|---|---:|
 | VPS Linux (IP publique, root) | ClockVenom — serveur NTP C2 + hébergement payloads | Hetzner / OVH | ~60 €/an |
-| Cloudflare Workers + KV | NullRelay — dead-drop C2 | Cloudflare | **0 €** *(free tier)* |
+| Cloudflare Workers + KV | NullRelay — dead-drop C2 | Cloudflare | ~60 €/an *(Workers Paid, 5 €/mois)* |
 | Nom de domaine | PhantomPage — crédibilité phishing | OVH / Namecheap | ~12 €/an |
 | Certificat SSL | PhantomPage — HTTPS | Let's Encrypt | **0 €** |
-| **Total infrastructure** | | | **~72 €/an** |
+| **Total infrastructure** | | | **~132 €/an** |
 
-> Le free tier Cloudflare Workers couvre 100 000 requêtes/jour et 100 000 lectures KV/jour — largement suffisant pour un usage opérationnel.
+> Le free tier Cloudflare Workers (100 000 requêtes/jour, 100 000 lectures KV/jour) peut suffire pour un usage ponctuel ou en phase de test. L'abonnement Workers Paid à 5 €/mois permet d'être plus à l'aise sur le volume de requêtes lors d'opérations prolongées avec de nombreux agents actifs.
 
 ---
 
@@ -342,8 +342,8 @@ Le projet privilégie l'infrastructure publique et gratuite (Cloudflare, Let's E
 |---|---:|
 | R&D | 2 000 € |
 | Développement | 25 033 € |
-| Infrastructure (1 an) | 72 € |
-| **Coût total projet** | **~27 105 €** |
+| Infrastructure (1 an) | 132 € |
+| **Coût total projet** | **~27 165 €** |
 
 En tenant compte des coûts totaux, des taxes et d'une marge commerciale raisonnable, le prix de vente estimé du produit est de **30 000 €**.
 

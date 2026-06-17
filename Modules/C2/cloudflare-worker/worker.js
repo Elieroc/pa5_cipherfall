@@ -117,6 +117,11 @@ export default {
       });
     }
 
+    if (request.method === "DELETE") {
+      await env.DB.prepare(`DELETE FROM ${table} WHERE ${idCol} = ?`).bind(id).run();
+      return new Response(null, { status: 200 });
+    }
+
     return new Response(null, { status: 405 });
   },
 };

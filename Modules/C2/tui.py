@@ -258,6 +258,7 @@ class ConfirmModal(ModalScreen):
                 yield Button("Cancel", id="confirm-no",  variant="default")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
         self.dismiss(event.button.id == "confirm-yes")
 
     def on_key(self, event) -> None:
@@ -478,6 +479,9 @@ class CipherfallTUI(App):
     # ── Data ─────────────────────────────────────────────────────────────────
 
     async def _load_agents(self) -> None:
+        if isinstance(self.screen, ModalScreen):
+            return
+
         agents_by_id: dict[str, tuple] = {}   # id -> (agent, base)
         all_tasks: list = []
 
@@ -495,6 +499,9 @@ class CipherfallTUI(App):
                     pass
 
         if not agents_by_id:
+            self._agents_data = {}
+            self._agent_base  = {}
+            self.query_one("#agents-table", DataTable).clear()
             return
 
         self._agent_base  = {aid: base for aid, (_, base) in agents_by_id.items()}
@@ -725,45 +732,47 @@ class CipherfallTUI(App):
     def action_do_refresh(self) -> None:
         asyncio.ensure_future(self._load_agents())
 
-    async def action_delete_agent(self) -> None:
+    def action_delete_agent(self) -> None:
         if not self._selected_agent:
             return
-        agent  = self._agents_data.get(self._selected_agent, {})
-        label  = agent.get("label") or self._selected_agent[:8]
-        info   = json.loads(agent.get("sysinfo") or "{}")
-        bi     = info.get("beacon_int", 30)
-        alive  = int(time.time()) - agent.get("last_seen", 0) < max(bi * 5, 30)
-        suffix = "  [kill remote process + remove]" if alive else "  [remove from DB]"
+        agent_id = self._selected_agent
+        agent    = self._agents_data.get(agent_id, {})
+        label    = agent.get("label") or agent_id[:8]
+        info     = json.loads(agent.get("sysinfo") or "{}")
+        bi       = info.get("beacon_int", 30)
+        alive    = int(time.time()) - agent.get("last_seen", 0) < max(bi * 5, 30)
+        suffix   = "  [kill remote process + remove]" if alive else "  [remove from DB]"
+        base     = self._agent_base.get(agent_id, BASE)
 
-        confirmed = await self.push_screen_wait(ConfirmModal(f"Delete agent  {label}{suffix}?"))
-        if not confirmed:
-            return
-
-        base = self._agent_base.get(self._selected_agent, BASE)
-
-        if alive:
+        async def on_confirm(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            if alive:
+                try:
+                    async with httpx.AsyncClient() as c:
+                        await c.post(
+                            f"{base}/admin/task",
+                            json={"agent_id": agent_id, "command": "kill $PPID"},
+                            timeout=3,
+                        )
+                    await asyncio.sleep(1.5)
+                except Exception:
+                    pass
             try:
                 async with httpx.AsyncClient() as c:
-                    await c.post(
-                        f"{base}/admin/task",
-                        json={"agent_id": self._selected_agent, "command": "kill $PPID"},
-                        timeout=3,
-                    )
-                await asyncio.sleep(1.5)
+                    await c.delete(f"{base}/admin/agents/{agent_id}", timeout=3)
             except Exception:
                 pass
+            if self._selected_agent == agent_id:
+                self._selected_agent = None
+                self._selected_task  = None
+                self.query_one("#cmd-input", Input).placeholder = "select an agent first"
+                self.query_one("#output-log", RichLog).clear()
+            self.query_one("#tasks-table", DataTable).clear()
+            self.query_one("#agents-table", DataTable).clear()
+            await self._load_agents()
 
-        try:
-            async with httpx.AsyncClient() as c:
-                await c.delete(f"{base}/admin/agents/{self._selected_agent}", timeout=3)
-        except Exception:
-            pass
-
-        self._selected_agent = None
-        self._selected_task  = None
-        self.query_one("#cmd-input", Input).placeholder = "select an agent first"
-        self.query_one("#output-log", RichLog).clear()
-        await self._load_agents()
+        self.push_screen(ConfirmModal(f"Delete agent  {label}{suffix}?"), on_confirm)
 
 
 if __name__ == "__main__":
