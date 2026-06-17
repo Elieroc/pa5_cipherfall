@@ -1,0 +1,56 @@
+services:
+  nr-agent-1:
+    build:
+      context: ..
+      dockerfile: env-tests/Dockerfile
+    command: python3 /agents/nullrelay.py
+    environment:
+      WORKER_URL: http://host.docker.internal:8787
+      C2_PSK: testkey123
+      C2_INT: "1"
+      C2_JITTER: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
+
+  nr-agent-2:
+    build:
+      context: ..
+      dockerfile: env-tests/Dockerfile
+    command: python3 /agents/nullrelay.py
+    environment:
+      WORKER_URL: http://host.docker.internal:8787
+      C2_PSK: testkey123
+      C2_INT: "1"
+      C2_JITTER: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
+
+  cv-agent-1:
+    build:
+      context: ..
+      dockerfile: env-tests/Dockerfile
+    command: python3 /agents/clockvenom.py
+    environment:
+      C2_PSK: testkey123
+      C2_INT: "1"
+      C2_JITTER: "1"
+      C2_DIRECT: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
+
+  cv-agent-2:
+    build:
+      context: ..
+      dockerfile: env-tests/Dockerfile
+    command: python3 /agents/clockvenom.py
+    environment:
+      C2_PSK: testkey123
+      C2_INT: "1"
+      C2_JITTER: "1"
+      C2_DIRECT: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
