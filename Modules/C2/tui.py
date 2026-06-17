@@ -584,6 +584,10 @@ class CipherfallTUI(App):
         log = self.query_one("#output-log", RichLog)
         log.clear()
         log.write(f"[bold cyan]$ {task['command']}[/bold cyan]")
+        if task.get("output"):
+            sent = _ts(task["created_at"]) if task.get("created_at") else "?"
+            recv = time.strftime("%H:%M:%S")
+            log.write(f"[dim]sent {sent}  →  received {recv}[/dim]")
 
         rc = self._recon_tasks.get(task_id)
         if rc and rc["type"] == "recon_write":
