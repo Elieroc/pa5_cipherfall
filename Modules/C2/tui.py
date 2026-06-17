@@ -23,6 +23,7 @@ from rich.text import Text
 from dotenv import load_dotenv
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Button, DataTable, Footer, Header, Input,
@@ -244,6 +245,26 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
     return t
 
 
+class ConfirmModal(ModalScreen):
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Static(self._message, id="confirm-msg")
+            with Horizontal(id="confirm-btns"):
+                yield Button("Delete", id="confirm-yes", variant="error")
+                yield Button("Cancel", id="confirm-no",  variant="default")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm-yes")
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+
+
 class GraphPane(Static):
     def update_graph(self, agents: list) -> None:
         self.update(_build_graph(
@@ -307,6 +328,35 @@ GraphPane {
     height: auto;
 }
 
+/* ── Confirm modal ── */
+ConfirmModal {
+    align: center middle;
+}
+#confirm-box {
+    width: 50;
+    height: auto;
+    border: solid #f85149;
+    background: #161b22;
+    padding: 1 2;
+}
+#confirm-msg {
+    color: white;
+    padding: 1 0;
+    height: auto;
+    background: transparent;
+    text-align: center;
+    width: 100%;
+}
+#confirm-btns {
+    height: 3;
+    align: center middle;
+    margin-top: 1;
+}
+#confirm-btns Button {
+    width: 14;
+    margin: 0 1;
+}
+
 /* ── Shared ── */
 Label {
     background: #161b22;
@@ -329,8 +379,9 @@ class CipherfallTUI(App):
     CSS   = CSS
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("r", "do_refresh", "Refresh"),
+        Binding("q", "quit",         "Quit"),
+        Binding("r", "do_refresh",   "Refresh"),
+        Binding("d", "delete_agent", "Delete agent"),
     ]
 
     _selected_agent: str | None = None
@@ -673,6 +724,46 @@ class CipherfallTUI(App):
 
     def action_do_refresh(self) -> None:
         asyncio.ensure_future(self._load_agents())
+
+    async def action_delete_agent(self) -> None:
+        if not self._selected_agent:
+            return
+        agent  = self._agents_data.get(self._selected_agent, {})
+        label  = agent.get("label") or self._selected_agent[:8]
+        info   = json.loads(agent.get("sysinfo") or "{}")
+        bi     = info.get("beacon_int", 30)
+        alive  = int(time.time()) - agent.get("last_seen", 0) < max(bi * 5, 30)
+        suffix = "  [kill remote process + remove]" if alive else "  [remove from DB]"
+
+        confirmed = await self.push_screen_wait(ConfirmModal(f"Delete agent  {label}{suffix}?"))
+        if not confirmed:
+            return
+
+        base = self._agent_base.get(self._selected_agent, BASE)
+
+        if alive:
+            try:
+                async with httpx.AsyncClient() as c:
+                    await c.post(
+                        f"{base}/admin/task",
+                        json={"agent_id": self._selected_agent, "command": "kill $PPID"},
+                        timeout=3,
+                    )
+                await asyncio.sleep(1.5)
+            except Exception:
+                pass
+
+        try:
+            async with httpx.AsyncClient() as c:
+                await c.delete(f"{base}/admin/agents/{self._selected_agent}", timeout=3)
+        except Exception:
+            pass
+
+        self._selected_agent = None
+        self._selected_task  = None
+        self.query_one("#cmd-input", Input).placeholder = "select an agent first"
+        self.query_one("#output-log", RichLog).clear()
+        await self._load_agents()
 
 
 if __name__ == "__main__":

@@ -257,6 +257,14 @@ async def create_task(request: Request):
     return {"task_id": task_id}
 
 
+@admin.delete("/admin/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    with _db() as con:
+        con.execute("DELETE FROM tasks  WHERE agent_id=?", (agent_id,))
+        con.execute("DELETE FROM agents WHERE id=?",       (agent_id,))
+    return {"status": "ok"}
+
+
 @admin.get("/admin/result/{task_id}")
 async def get_result(task_id: str):
     with _db() as con:
