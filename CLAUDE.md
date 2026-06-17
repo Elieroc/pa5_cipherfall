@@ -27,19 +27,23 @@ bash Modules/Anti-forensics/echoerase_delayer.sh <script.sh> <fixed_delay_s> <ji
 # EchoErase: rename a file (base64 stem by default, or random/ext options)
 python3 Modules/Anti-forensics/echoerase_renamer.py [--no-recover] [--ext] [--view] <file>
 
-# NullRelay: start Cloudflare C2 server (requires WORKER_URL env var)
+# NullRelay: start Cloudflare C2 server (copy Modules/C2/.env.example → .env and fill values)
 cd Modules/C2/cloudflare-worker && pip install -r requirements.txt
-WORKER_URL=https://... C2_PSK=... python3 server.py
+python3 server.py
 
-# C2: interactive TUI dashboard (NullRelay / ClockVenom)
-cd Modules/C2 && WORKER_URL=https://... C2_PSK=... python3 tui.py
+# C2: interactive TUI dashboard (NullRelay / ClockVenom) — reads Modules/C2/.env automatically
+python3 Modules/C2/tui.py
 
-# NullRelay: deploy Cloudflare Worker dead-drop
-cd Modules/C2/cloudflare-worker && wrangler secret put WORKER_SECRET && wrangler deploy
+# NullRelay: deploy Cloudflare Worker dead-drop (D1 database required)
+cd Modules/C2/cloudflare-worker
+wrangler d1 create cipherfall-c2-db          # copy returned id into wrangler.toml [[d1_databases]]
+wrangler d1 execute cipherfall-c2-db --remote --command "CREATE TABLE IF NOT EXISTS tasks (agent_id TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS results (task_id TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS heartbeats (agent_id TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER NOT NULL);"
+wrangler secret put WORKER_SECRET            # value = HMAC-SHA256(PSK, "worker_token")[:32]
+wrangler deploy
 
 # ClockVenom: start NTP C2 server (requires root or CAP_NET_BIND_SERVICE for UDP/123)
 cd Modules/C2/ntp && pip install -r requirements.txt
-sudo C2_PSK=... python3 server.py
+sudo python3 server.py
 
 # ClockVenom: print agent ID on target (no pip required)
 python3 Modules/C2/ntp/clockvenom.py --id
@@ -95,7 +99,7 @@ Full attack pipeline: recon target → obfuscate payload → drop via fileless d
 
 **ShadowScript** (`shadowscript.sh`, `shadowscript.py`): Stacks gzip → base64 → ROT13, then splits into variable-size chunks, shuffles chunk definition order (Fisher-Yates), encodes all command names in hex (`$'\x..'`) or chr() sequences, and injects decoy variables from a hardcoded fake-pool. The final stub never contains any readable string like `eval`, `base64`, or `gunzip`.
 
-**NullRelay / ClockVenom** (`server.py`, `nullrelay.py` / `clockvenom.py`, `worker.js`, `tui.py`, `operator_cli.py`): Three-tier architecture — C2 server (operator-side, no public port) ↔ Cloudflare Worker KV dead-drop ↔ agent (victim-side). Server and agent never connect directly; all traffic is HTTPS/443 to Cloudflare edge.
+**NullRelay / ClockVenom** (`server.py`, `nullrelay.py` / `clockvenom.py`, `worker.js`, `tui.py`, `operator_cli.py`): Three-tier architecture — C2 server (operator-side, no public port) ↔ Cloudflare Worker D1 dead-drop ↔ agent (victim-side). Server and agent never connect directly; all traffic is HTTPS/443 to Cloudflare edge.
 
 _Dead-drop flow:_ (1) operator queues task → stored in SQLite as `pending`; (2) server dispatch loop PUTs encrypted task to Worker `PUT /task/{agent_id}` → marked `sent` on HTTP 200; (3) agent beacons: PUTs heartbeat to `/hb/{agent_id}`, GETs `/task/{agent_id}` (204 = nothing, 200 = execute), PUTs result to `/result/{task_id}`; (4) server collect loop GETs `/result/{task_id}` → decrypts, stores in SQLite, marks `done`.
 
@@ -107,19 +111,19 @@ _Agent identity:_ SHA-256 of `/etc/machine-id` (fallback: hostname), truncated t
 
 _Agent commands:_ any shell string (executed via `/bin/sh`, stdout+stderr returned); `UPLOAD:/path` (file read binary, returned as base64).
 
-_Worker KV TTLs:_ task 1h, result 24h, heartbeat 10min. Task GET is one-time read (`ctx.waitUntil` delete). `GET /agents` lists all `hb:` keys for auto-discovery (max 1000).
+_Worker D1 storage:_ Three tables (`tasks`, `results`, `heartbeats`), each with an `expires_at` column (Unix timestamp). TTLs enforced on every read: task 1h, result 24h, heartbeat 10min. Task GET is one-time read (`ctx.waitUntil` delete). `GET /agents` queries `heartbeats WHERE expires_at > now`. Worker also supports `DELETE /{resource}/{id}` to purge any row immediately (used by server when deleting an agent). D1 provides strong read-after-write consistency (primary replica) vs. KV eventual consistency — task delivery latency ~1s vs. up to 60s with KV.
 
 _Server env vars:_ `WORKER_URL` (required), `C2_PSK` (default: `changeme`), `C2_DB` (`c2.db`), `C2_ADMIN` (port, default `1337`), `C2_POLL` (interval s, default `10`).
 
 _Agent env vars (bake before obfuscating):_ `WORKER_URL` (required), `C2_PSK` (`changeme`), `C2_INT` (beacon interval s, `30`), `C2_JITTER` (±jitter s, `10`).
 
-_Server admin API (127.0.0.1 only):_ `GET /admin/agents`, `GET /admin/tasks`, `POST /admin/register {agent_id, label?}`, `POST /admin/task {agent_id, command}`, `GET /admin/result/<task_id>`.
+_Server admin API (127.0.0.1 only):_ `GET /admin/agents`, `GET /admin/tasks`, `POST /admin/register {agent_id, label?}`, `POST /admin/task {agent_id, command}`, `GET /admin/result/<task_id>`, `DELETE /admin/agents/{agent_id}` (removes agent + its tasks from SQLite and purges heartbeat from CF Worker D1 so the heartbeat loop does not re-register it). Identical API on both NullRelay (`:1337`) and ClockVenom (`:1338`) servers.
 
-_TUI_ (`tui.py`, Textual + Rich): two tabs — **Agents** (list agents, browse tasks, dispatch commands, auto-refresh every 5s) and **Payload** (bakes `nullrelay.py` or `clockvenom.py` via regex substitution of constants, optionally calls `shadowscript.py`). Reads `C2_ADMIN_PORT` (default `1337`), `WORKER_URL`, `C2_PSK`.
+_TUI_ (`tui.py`, Textual + Rich): three tabs — **Agents** (list agents, browse tasks, dispatch commands, auto-refresh every 5s; `d` deletes selected agent with confirmation modal — sends `kill $PPID` if alive, then removes from DB and purges CF Worker heartbeat), **Graphe** (ASCII topology tree showing C2 → direct agents → relay chains, dead agents in separate section), **Payload** (bakes `nullrelay.py` or `clockvenom.py` via regex substitution of constants, optionally calls `shadowscript.py`). Loads `.env` from the script's own directory (`pathlib.Path(__file__).parent / ".env"`). Reads `C2_ADMIN_PORTS` (comma-separated list, default `1338,1337` — polls all ports and merges results), `WORKER_URL`, `C2_PSK`, `C2_HOST`.
 
 _Operator CLI_ (`operator_cli.py`, stdlib only): `agents`, `register <id> [label]`, `tasks`, `task <id_prefix> <cmd>` (prefix min 4 chars), `result <task_id>`, `wait <task_id>` (polls every 5s).
 
-_Worker deployment:_ `wrangler kv:namespace create "C2_KV"` → paste id in `wrangler.toml`; `wrangler secret put WORKER_SECRET` (paste derived token); `wrangler deploy`.
+_Worker deployment:_ see run commands above for full D1 setup sequence. `WORKER_SECRET` = `HMAC-SHA256(PSK, b"worker_token").hexdigest()[:32]`.
 
 _Limitations:_ task lost if agent crashes after GET before PUT result (re-queue manually); one pending task per agent at a time; SQLite not suitable for large deployments; agent has no persistence (pair with dropper).
 
@@ -129,7 +133,7 @@ _Limitations:_ task lost if agent crashes after GET before PUT result (re-queue 
 
 **IronVeil** (`ironveil.c`, `stego_embed.py`): Linux LKM rootkit. Hooks `__x64_sys_read`, `__x64_sys_getdents64`, `__x64_sys_kill` via **kretprobes** (requires `CONFIG_KPROBES`). At load: (1) injects NTP-to-C2 redirect IPs into `/etc/hosts` for ClockVenom redirection; (2) hooks `read()` to filter those IPs from every process except ones named `ntp-agent` (ClockVenom agent sets this name via `prctl(PR_SET_NAME)` before DNS resolution); (3) self-hides from `lsmod`, `/proc/modules`, `/sys/module/`. Runtime file/PID hiding via `/proc/ironveil_ctrl` (write-only, itself hidden); max 64 PIDs, 64 filenames. Files prefixed `ironveil_` auto-hidden. `rmmod` unavailable after self-hide; hooks survive until reboot. **Dead-drop resolver**: at load, schedules a delayed kernel workqueue (5s) that calls `call_usermodehelper` to spawn `python3` with an embedded fetcher script. The script: renames itself `kworker/0:1H` via `prctl`; sleeps 60–300s (random); fetches a PNG from `STEGO_IMG_URL`; walks PNG chunks to find `tEXt` keyword `X-Payload`; base64-decodes and XOR-decrypts (16-byte key, same as `stego_embed.py`) to recover the payload URL; double-forks and execs the payload fileless via `memfd_create`. Operator workflow: run `stego_embed.py` to embed URL into a PNG, host it publicly, set `STEGO_IMG_URL` + `PYTHON3_PATH` in `ironveil.c`, rebuild. Build prereq: `linux-headers-$(uname -r)`. Kernel compat: ≥ 6.1 with BHI mitigations (kretprobe on `x64_sys_call`), 5.7–6.x (kallsyms via kprobe), 4.x–5.6 (kallsyms exported directly). Tested on Debian 12, kernel 6.1.0-49-amd64. Bypasses: `mmap()` and `pread64()` on `/etc/hosts` not hooked — true content readable. File hiding blocks `getdents` only; direct path access (`cat /path/file`) unaffected.
 
-**ClockVenom** (`ntp/clockvenom.py`, `ntp/server.py`): NTP-tunnelled C2. Agent resolves its distro's default NTP domain (e.g. `ntp.ubuntu.com`) — operator compromises `/etc/hosts` on target to redirect that domain to the C2 server. Commands and results are hidden in NTS Cookie extension fields (type `0x0104`, RFC 8915) of standard NTP Mode-3/4 packets; clean 48-byte requests sent when idle. Encryption same AES-256-GCM + PBKDF2-SHA256 scheme as NullRelay. Server binds UDP/123 (requires root) + FastAPI admin HTTP on `127.0.0.1:1338`; `operator_cli.py` and `tui.py` work against it unchanged. Env vars: `C2_PSK`, `C2_DB` (`ntp_c2.db`), `C2_ADMIN` (`1338`), `C2_DEBUG`.
+**ClockVenom** (`ntp/clockvenom.py`, `ntp/server.py`): NTP-tunnelled C2. Agent resolves its distro's default NTP domain (e.g. `ntp.ubuntu.com`) — operator compromises `/etc/hosts` on target to redirect that domain to the C2 server. Alternatively set `C2_DIRECT=<ip>` to bypass DNS entirely and connect directly to a known IP (no `/etc/hosts` modification needed). Commands and results are hidden in NTS Cookie extension fields (type `0x0104`, RFC 8915) of standard NTP Mode-3/4 packets; clean 48-byte requests sent when idle. Encryption same AES-256-GCM + PBKDF2-SHA256 scheme as NullRelay. Server binds UDP/123 (requires root) + FastAPI admin HTTP on `127.0.0.1:1338`; `operator_cli.py` and `tui.py` work against it unchanged. Same admin API as NullRelay including `DELETE /admin/agents/{agent_id}`. Env vars: `C2_PSK`, `C2_DB` (`ntp_c2.db`), `C2_ADMIN` (`1338`), `C2_DEBUG`. Agent additional env vars: `C2_DIRECT` (IP, bypasses DNS), `C2_TCP_PORT` (TCP relay port, default `443`).
 
 **Privesc** (`dirtyfrag/`, `ssh-keysign-pwn/`, `fragnesia.sh`, `copyfail.py`): Four exploits. `dirtyfrag` targets CVE via fragmented memory. `ssh-keysign-pwn` abuses `ssh-keysign` SUID binary (also includes `chage_pwn.c` and `exploit_vuln_target.c`). `fragnesia.sh` sets up a user+network namespace (CVE-2026-46300 prerequisite) via `unshare --user --map-root-user --net` and drops into an interactive shell ready to run the actual exploit — it is the namespace wrapper, not the exploit binary itself. `copyfail.py` implements splice-based arbitrary-write via AF_ALG + KTLS socket (ctypes `libc.splice()`), overwrites `/bin/su` in-place kernel-copy-style, then calls `os.system("su")`; requires Python ≥ 3.10.
 
