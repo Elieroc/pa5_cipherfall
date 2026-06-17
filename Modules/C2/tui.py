@@ -199,10 +199,11 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
     wurl = worker_url.rstrip("/")
     t    = Text()
 
-    dead: list       = []
-    layer1: list     = []
+    dead: list        = []
+    layer1: list      = []
     relay_by_host: dict = {}
-    orphans: list    = []
+    relay_by_port: dict = {}
+    orphans: list     = []
 
     for a in agents:
         info = json.loads(a.get("sysinfo") or "{}")
@@ -219,6 +220,7 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
             layer1.append((a, info, []))
             if rhost:
                 relay_by_host[rhost] = idx
+            relay_by_port[rport] = idx
         elif awurl == wurl or ahost == c2_host or not awurl:
             layer1.append((a, info, []))
         else:
@@ -227,6 +229,12 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
     for a, info, awurl in orphans:
         ahost = _url_host(awurl)
         idx   = relay_by_host.get(ahost)
+        if idx is None:
+            try:
+                aport = int(awurl.rsplit(":", 1)[1].split("/")[0])
+                idx = relay_by_port.get(aport)
+            except Exception:
+                pass
         if idx is not None:
             layer1[idx][2].append((a, info, awurl))
         else:

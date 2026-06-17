@@ -1,5 +1,5 @@
 services:
-  nr-agent-1:
+  nr-relay:
     build:
       context: ..
       dockerfile: env-tests/Dockerfile
@@ -10,28 +10,29 @@ services:
       C2_PSK: testkey123
       C2_INT: "1"
       C2_JITTER: "1"
+      C2_RELAY_PORT: "8443"
       USER: root
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: on-failure
 
-  nr-agent-2:
+  nr-isolated:
     build:
       context: ..
       dockerfile: env-tests/Dockerfile
     hostname: phantom
     command: python3 /agents/nullrelay.py
     environment:
-      WORKER_URL: http://host.docker.internal:8787
+      WORKER_URL: http://nr-relay:8443
       C2_PSK: testkey123
       C2_INT: "1"
       C2_JITTER: "1"
       USER: root
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: on-failure
+    depends_on:
+      - nr-relay
 
-  cv-agent-1:
+  cv-relay:
     build:
       context: ..
       dockerfile: env-tests/Dockerfile
@@ -42,12 +43,14 @@ services:
       C2_INT: "1"
       C2_JITTER: "1"
       C2_DIRECT: host.docker.internal
+      C2_NTP_RELAY_PORT: "123"
+      C2_NTP_RELAY_TARGET: host.docker.internal:443
       USER: root
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: on-failure
 
-  cv-agent-2:
+  cv-isolated:
     build:
       context: ..
       dockerfile: env-tests/Dockerfile
@@ -57,8 +60,8 @@ services:
       C2_PSK: testkey123
       C2_INT: "1"
       C2_JITTER: "1"
-      C2_DIRECT: host.docker.internal
+      C2_DIRECT: cv-relay
       USER: root
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: on-failure
+    depends_on:
+      - cv-relay
