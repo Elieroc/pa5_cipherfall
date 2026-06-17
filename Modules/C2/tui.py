@@ -31,7 +31,7 @@ from textual.widgets import (
 )
 import httpx
 
-load_dotenv()
+load_dotenv(pathlib.Path(__file__).parent / ".env")
 
 _ports       = os.environ.get("C2_ADMIN_PORTS",
                    os.environ.get("C2_ADMIN_PORT", "1338,1337")).split(",")

@@ -54,7 +54,7 @@ Limitations:
   - SQLite serialises concurrent writes; not suitable for large deployments.
 """
 
-import asyncio, base64, hashlib, hmac as _stdlib_hmac, json, os, sqlite3, time, uuid
+import asyncio, base64, hashlib, hmac as _stdlib_hmac, json, os, pathlib, sqlite3, time, uuid
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 import uvicorn, httpx
@@ -63,7 +63,7 @@ from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 
-load_dotenv()
+load_dotenv(pathlib.Path(__file__).parent.parent / ".env")
 
 WORKER_URL = os.environ.get("WORKER_URL",  "https://your-worker.workers.dev").rstrip("/")
 PSK        = os.environ.get("C2_PSK",      "changeme")
