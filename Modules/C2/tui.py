@@ -763,7 +763,7 @@ class CipherfallTUI(App):
             data = lp.read_bytes()
             rp = parts[3] if len(parts) > 3 else f"/tmp/{lp.name}"
             b64 = base64.b64encode(data).decode()
-            cmd = f"echo '{b64}' | base64 -d > {rp} && echo 'uploaded {lp.name} ({len(data)}B) -> {rp}'"
+            cmd = f"WRITE:{rp}:{b64}"
         elif cmd.startswith("/module download"):
             parts = cmd.split(None, 3)
             if len(parts) < 3:

