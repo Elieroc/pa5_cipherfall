@@ -390,7 +390,7 @@ def _exec(cmd: str) -> str:
         except Exception as e:
             return f"[error: {e}]"
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
         return (r.stdout + r.stderr) or "[no output]"
     except subprocess.TimeoutExpired:
         return "[timeout]"

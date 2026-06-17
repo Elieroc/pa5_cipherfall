@@ -426,7 +426,7 @@ def _exec(cmd):
         except Exception as e:
             return f"[error: {e}]"
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
         out = (r.stdout + r.stderr) or "[no output]"
         if len(out) > MAX_OUTPUT:
             out = out[:MAX_OUTPUT] + "[...truncated]"
