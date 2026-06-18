@@ -421,6 +421,24 @@ GraphPane {
     height: auto;
 }
 
+/* ── Terminal tab ── */
+#terminal-outer {
+    height: 1fr;
+}
+#term-output {
+    height: 1fr;
+    background: #0d1117;
+    border: none;
+    padding: 0 1;
+}
+#term-output:focus {
+    border: none;
+}
+#term-input {
+    margin: 1 1 1 1;
+    border: solid #30363d;
+}
+
 /* ── Confirm modal ── */
 ConfirmModal {
     align: center middle;
@@ -552,6 +570,9 @@ class CipherfallTUI(App):
     _history_idx:          int       = -1
     _autocomplete_matches: list[str] = []
     _autocomplete_idx:     int       = -1
+    _terminal_cwd:         str       = ""
+    _terminal_history:     list[str] = []
+    _terminal_history_idx: int       = -1
     _agent_base: dict[str, str] = {}   # agent_id -> base URL
     _agents_data: dict[str, dict] = {}  # agent_id -> agent dict (includes sysinfo)
     _download_tasks:    dict[str, dict] = {}  # task_id -> {type, ...}
@@ -627,6 +648,12 @@ class CipherfallTUI(App):
                         yield Button("GENERATE PAYLOAD", id="btn-generate", variant="primary")
                         yield Static("", id="payload-status")
 
+            with TabPane("Terminal", id="tab-terminal"):
+                with Vertical(id="terminal-outer"):
+                    yield OutputTextArea("", id="term-output", read_only=True,
+                                         show_line_numbers=False)
+                    yield Input(placeholder="", id="term-input")
+
         yield Footer()
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
@@ -642,9 +669,60 @@ class CipherfallTUI(App):
         self.query_one("#row-relay").display      = True
         self.query_one("#row-relay-host").display = False
         self.query_one("#row-relay-port").display = False
+        self._terminal_cwd = str(pathlib.Path.cwd())
+        self.query_one("#term-input", Input).placeholder = f"{self._terminal_cwd} $"
         await self._load_agents()
         self.set_interval(5.0, self._load_agents)
         self.set_interval(5.0, self._collect_chunks)
+
+    # ── Terminal ─────────────────────────────────────────────────────────────
+
+    async def _run_terminal_cmd(self, cmd: str) -> None:
+        log = self.query_one("#term-output", OutputTextArea)
+        cwd = self._terminal_cwd
+        log.write(f"[bold cyan]{cwd} $ {cmd}[/bold cyan]")
+
+        if cmd.strip() == "clear":
+            log.load_text("")
+            return
+
+        if cmd.startswith("cd"):
+            parts  = cmd.split(None, 1)
+            target = parts[1].strip() if len(parts) > 1 else str(pathlib.Path.home())
+            target = target.strip("'\"")
+            try:
+                new = (pathlib.Path(cwd) / target).expanduser().resolve()
+                if new.is_dir():
+                    self._terminal_cwd = str(new)
+                    self.query_one("#term-input", Input).placeholder = f"{self._terminal_cwd} $"
+                else:
+                    log.write_raw(f"cd: {target}: Not a directory")
+            except Exception as e:
+                log.write_raw(f"cd: {e}")
+            return
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                log.write("[red]timeout (30s)[/red]")
+                return
+            out = stdout.decode(errors="replace").rstrip("\n")
+            err = stderr.decode(errors="replace").rstrip("\n")
+            if out:
+                log.write_raw(out)
+            if err:
+                log.write_raw(err)
+        except Exception as e:
+            log.write(f"[red]{e}[/red]")
 
     # ── Data ─────────────────────────────────────────────────────────────────
 
@@ -939,7 +1017,31 @@ class CipherfallTUI(App):
 
     def on_key(self, event) -> None:
         focused = self.focused
-        if not (focused and getattr(focused, "id", None) == "cmd-input"):
+        inp_id  = getattr(focused, "id", None) if focused else None
+
+        if inp_id == "term-input":
+            inp = self.query_one("#term-input", Input)
+            if event.key == "up":
+                if not self._terminal_history:
+                    return
+                self._terminal_history_idx = min(
+                    self._terminal_history_idx + 1, len(self._terminal_history) - 1
+                )
+                inp.value = self._terminal_history[self._terminal_history_idx]
+                inp.cursor_position = len(inp.value)
+                event.prevent_default()
+            elif event.key == "down":
+                if self._terminal_history_idx <= 0:
+                    self._terminal_history_idx = -1
+                    inp.value = ""
+                    return
+                self._terminal_history_idx -= 1
+                inp.value = self._terminal_history[self._terminal_history_idx]
+                inp.cursor_position = len(inp.value)
+                event.prevent_default()
+            return
+
+        if inp_id != "cmd-input":
             return
         inp = self.query_one("#cmd-input", Input)
         if event.key == "up":
@@ -988,6 +1090,19 @@ class CipherfallTUI(App):
             self.query_one("#cmd-hint", Static).update("")
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "term-input":
+            cmd = event.value.strip()
+            event.input.value = ""
+            if not cmd:
+                return
+            if not self._terminal_history or self._terminal_history[0] != cmd:
+                self._terminal_history.insert(0, cmd)
+                if len(self._terminal_history) > 100:
+                    self._terminal_history.pop()
+            self._terminal_history_idx = -1
+            await self._run_terminal_cmd(cmd)
+            return
+
         if event.input.id != "cmd-input":
             return
         cmd = event.value.strip()
