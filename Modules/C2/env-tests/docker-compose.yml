@@ -32,6 +32,38 @@ services:
     depends_on:
       - nr-relay
 
+  nr-direct:
+    build:
+      context: ..
+      dockerfile: env-tests/Dockerfile
+    hostname: ghost
+    command: python3 /agents/nullrelay.py
+    environment:
+      WORKER_URL: http://host.docker.internal:8787
+      C2_PSK: testkey123
+      C2_INT: "1"
+      C2_JITTER: "1"
+      USER: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
+
+  nr-dead:
+    build:
+      context: ..
+      dockerfile: env-tests/Dockerfile
+    hostname: shade
+    command: sh -c "python3 /agents/nullrelay.py & sleep 5; kill %1"
+    environment:
+      WORKER_URL: http://host.docker.internal:8787
+      C2_PSK: testkey123
+      C2_INT: "1"
+      C2_JITTER: "1"
+      USER: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+
   cv-relay:
     build:
       context: ..
@@ -65,3 +97,19 @@ services:
     restart: on-failure
     depends_on:
       - cv-relay
+
+  cv-direct:
+    build:
+      context: ..
+      dockerfile: env-tests/Dockerfile
+    hostname: venom
+    command: python3 /agents/clockvenom.py
+    environment:
+      C2_PSK: testkey123
+      C2_INT: "1"
+      C2_JITTER: "1"
+      C2_DIRECT: host.docker.internal
+      USER: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
