@@ -171,15 +171,16 @@ async def _fetch_heartbeat(client: httpx.AsyncClient, agent_id: str, now: int):
             return
         payload = _decrypt(r.text)
         sysinfo = payload.get("sysinfo", {})
+        last_seen = int(payload.get("ts", now))
         with _db() as con:
             con.execute(
                 "INSERT OR IGNORE INTO agents (id, label, first_seen, last_seen, sysinfo)"
                 " VALUES (?,?,?,?,?)",
-                (agent_id, sysinfo.get("hostname", agent_id[:8]), now, now, "{}")
+                (agent_id, sysinfo.get("hostname", agent_id[:8]), last_seen, last_seen, "{}")
             )
             con.execute(
                 "UPDATE agents SET last_seen=?, sysinfo=? WHERE id=?",
-                (now, json.dumps(sysinfo), agent_id)
+                (last_seen, json.dumps(sysinfo), agent_id)
             )
     except Exception:
         pass
