@@ -27,6 +27,7 @@ Les modules de privilege escalation n'ont pas de nom de malware — ce sont des 
 
 | Exploit | Fichier | Cible |
 |---|---|---|
+| CopyFail | `copyfail.py` | AF_ALG + KTLS splice — écrasement /bin/su (Python ≥ 3.10) |
 | DirtyFrag | `dirtyfrag/exp` | CVE — fragmentation mémoire |
 | ssh-keysign PWN | `ssh-keysign-pwn/sshkeysign_pwn` | Abus du binaire SUID `ssh-keysign` |
 | Fragnesia | `fragnesia.sh` | CVE-2026-46300 — wrapper namespace user+network |

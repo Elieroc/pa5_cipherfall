@@ -532,7 +532,7 @@ uid=0(root) gid=0(root) groupes=0(root)
 **fragnesia** : prépare uniquement un namespace user+net (`unshare --user --map-root-user --net`) — pas de root réel sur l'hôte. Interactif : utiliser avec `/module relay` pour accéder au shell namespace.
 
 > **Note NTP** : dirtyfrag pèse ~78 KB encodé — dépasse la limite UDP/123. Lancer `/module relay` avant `/module privesc dirtyfrag` sur un agent ClockVenom.
-> **Note copyfail** : requiert Python ≥ 3.10 sur la cible. Vérifié automatiquement en mode auto.
+> **Note copyfail** : requiert Python ≥ 3.10 sur la cible. Vérifié automatiquement en mode auto. Le script est envoyé en deux tâches : `WRITE:` (upload) puis exec + cleanup (comme `/module recon`).
 > Root non requis pour lancer — l'exploit escalade depuis un user non-privilégié.
 
 #### `/module suicide`
@@ -543,7 +543,7 @@ Auto-destruction de l'agent et effacement des traces sur la cible. Affiche une c
 /module suicide    # demande confirmation → envoie la commande → auto-supprime de la DB
 ```
 
-Séquence d'exécution sur l'agent (2 s après envoi de `[suicide: ok]`) :
+Séquence d'exécution sur l'agent (déclenchée après confirmation que `[suicide: ok]` a bien été livré au serveur C2, max 30 s) :
 
 1. `auditctl -e 0` — coupe l'audit kernel
 2. Zeroing des variables d'historique shell
