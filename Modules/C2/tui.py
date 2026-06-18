@@ -171,10 +171,10 @@ def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
         type_s = "yellow bold"
     elif atype == "cf":
         dot_s  = "bright_cyan bold"
-        type_s = "bold cyan"
+        type_s = "bright_cyan bold"
     else:
         dot_s  = "bright_yellow bold"
-        type_s = "bold yellow"
+        type_s = "bright_yellow bold"
 
     type_l = " CF " if atype == "cf" else " NTP"
 
@@ -306,9 +306,9 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
     t.append("  ◆ ", style="yellow bold")
     t.append("relay node", style="yellow")
     t.append("   ■ ", style="bright_cyan bold")
-    t.append("CF", style="bold cyan")
+    t.append("CF", style="bright_cyan bold")
     t.append("   ■ ", style="bright_yellow bold")
-    t.append("NTP", style="bold yellow")
+    t.append("NTP", style="bright_yellow bold")
     t.append("   ✗ ", style="dim red")
     t.append("offline", style="dim white")
 
