@@ -434,9 +434,11 @@ GraphPane {
 #term-output:focus {
     border: none;
 }
-#term-input {
-    margin: 1 1 1 1;
-    border: solid #30363d;
+TerminalTextArea > .text-area--cursor-line {
+    background: #161b22;
+}
+TerminalTextArea > .text-area--selection {
+    background: #1f6feb 50%;
 }
 
 /* ── Confirm modal ── */
@@ -531,6 +533,109 @@ class OutputTextArea(TextArea):
         self.scroll_end(animate=False)
 
 
+class TerminalTextArea(TextArea):
+    """Single-widget interactive terminal — input and output share the same area."""
+
+    class Submit(Message):
+        def __init__(self, command: str) -> None:
+            self.command = command
+            super().__init__()
+
+    BINDINGS = [Binding("ctrl+shift+c", "copy", description="Copy selection", show=False)]
+
+    _input_start: tuple = (0, 0)
+    _prompt:      str   = ""
+    _t_history:   list  = []
+    _t_hist_idx:  int   = -1
+
+    def initialize(self, cwd: str) -> None:
+        self._prompt     = f"{cwd} $ "
+        self._t_history  = []
+        self._t_hist_idx = -1
+        self.load_text(self._prompt)
+        self._input_start = self.document.end
+        self.move_cursor(self._input_start)
+
+    def update_prompt(self, cwd: str) -> None:
+        self._prompt = f"{cwd} $ "
+
+    def show_output(self, text: str) -> None:
+        self.insert(text + "\n", location=self.document.end)
+
+    def show_new_prompt(self) -> None:
+        self.insert(self._prompt, location=self.document.end)
+        self._input_start = self.document.end
+        self.move_cursor(self._input_start)
+        self.scroll_end(animate=False)
+
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+c":
+            cur = self.document.get_text_range(self._input_start, self.document.end)
+            if cur:
+                self.delete(self._input_start, self.document.end,
+                            maintain_selection_offset=False)
+            event.prevent_default()
+            return
+
+        if event.key == "up":
+            if not self._t_history:
+                event.prevent_default()
+                return
+            self._t_hist_idx = min(self._t_hist_idx + 1, len(self._t_history) - 1)
+            self.delete(self._input_start, self.document.end,
+                        maintain_selection_offset=False)
+            self.insert(self._t_history[self._t_hist_idx], location=self._input_start)
+            self.move_cursor(self.document.end)
+            event.prevent_default()
+            return
+
+        if event.key == "down":
+            self.delete(self._input_start, self.document.end,
+                        maintain_selection_offset=False)
+            if self._t_hist_idx > 0:
+                self._t_hist_idx -= 1
+                self.insert(self._t_history[self._t_hist_idx], location=self._input_start)
+                self.move_cursor(self.document.end)
+            else:
+                self._t_hist_idx = -1
+            event.prevent_default()
+            return
+
+        if event.key == "enter":
+            cmd = self.document.get_text_range(
+                self._input_start, self.document.end
+            ).strip()
+            self.insert("\n", location=self.document.end)
+            self._t_hist_idx = -1
+            if cmd:
+                if not self._t_history or self._t_history[0] != cmd:
+                    self._t_history.insert(0, cmd)
+                    if len(self._t_history) > 100:
+                        self._t_history.pop()
+                self.post_message(TerminalTextArea.Submit(cmd))
+            else:
+                self.show_new_prompt()
+            event.prevent_default()
+            return
+
+        if event.key == "home":
+            self.move_cursor(self._input_start)
+            event.prevent_default()
+            return
+
+        if event.key == "tab":
+            event.prevent_default()
+            return
+
+        if event.key in ("backspace", "left"):
+            if self.cursor_location <= self._input_start:
+                event.prevent_default()
+            return
+
+        if len(event.key) == 1 and self.cursor_location < self._input_start:
+            self.move_cursor(self.document.end)
+
+
 _COMPLETIONS: list[str] = [
     "/module ghost on",
     "/module ghost off",
@@ -570,9 +675,7 @@ class CipherfallTUI(App):
     _history_idx:          int       = -1
     _autocomplete_matches: list[str] = []
     _autocomplete_idx:     int       = -1
-    _terminal_cwd:         str       = ""
-    _terminal_history:     list[str] = []
-    _terminal_history_idx: int       = -1
+    _terminal_cwd: str = ""
     _agent_base: dict[str, str] = {}   # agent_id -> base URL
     _agents_data: dict[str, dict] = {}  # agent_id -> agent dict (includes sysinfo)
     _download_tasks:    dict[str, dict] = {}  # task_id -> {type, ...}
@@ -650,9 +753,7 @@ class CipherfallTUI(App):
 
             with TabPane("Terminal", id="tab-terminal"):
                 with Vertical(id="terminal-outer"):
-                    yield OutputTextArea("", id="term-output", read_only=True,
-                                         show_line_numbers=False)
-                    yield Input(placeholder="", id="term-input")
+                    yield TerminalTextArea("", id="term-output", show_line_numbers=False)
 
         yield Footer()
 
@@ -670,20 +771,22 @@ class CipherfallTUI(App):
         self.query_one("#row-relay-host").display = False
         self.query_one("#row-relay-port").display = False
         self._terminal_cwd = str(pathlib.Path.cwd())
-        self.query_one("#term-input", Input).placeholder = f"{self._terminal_cwd} $"
+        self.query_one("#term-output", TerminalTextArea).initialize(self._terminal_cwd)
         await self._load_agents()
         self.set_interval(5.0, self._load_agents)
         self.set_interval(5.0, self._collect_chunks)
 
     # ── Terminal ─────────────────────────────────────────────────────────────
 
+    async def on_terminal_text_area_submit(self, event: TerminalTextArea.Submit) -> None:
+        await self._run_terminal_cmd(event.command)
+
     async def _run_terminal_cmd(self, cmd: str) -> None:
-        log = self.query_one("#term-output", OutputTextArea)
+        ta  = self.query_one("#term-output", TerminalTextArea)
         cwd = self._terminal_cwd
-        log.write(f"[bold cyan]{cwd} $ {cmd}[/bold cyan]")
 
         if cmd.strip() == "clear":
-            log.load_text("")
+            ta.initialize(cwd)
             return
 
         if cmd.startswith("cd"):
@@ -694,11 +797,12 @@ class CipherfallTUI(App):
                 new = (pathlib.Path(cwd) / target).expanduser().resolve()
                 if new.is_dir():
                     self._terminal_cwd = str(new)
-                    self.query_one("#term-input", Input).placeholder = f"{self._terminal_cwd} $"
+                    ta.update_prompt(self._terminal_cwd)
                 else:
-                    log.write_raw(f"cd: {target}: Not a directory")
+                    ta.show_output(f"cd: {target}: Not a directory")
             except Exception as e:
-                log.write_raw(f"cd: {e}")
+                ta.show_output(f"cd: {e}")
+            ta.show_new_prompt()
             return
 
         try:
@@ -713,16 +817,19 @@ class CipherfallTUI(App):
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.communicate()
-                log.write("[red]timeout (30s)[/red]")
+                ta.show_output("timeout (30s)")
+                ta.show_new_prompt()
                 return
             out = stdout.decode(errors="replace").rstrip("\n")
             err = stderr.decode(errors="replace").rstrip("\n")
             if out:
-                log.write_raw(out)
+                ta.show_output(out)
             if err:
-                log.write_raw(err)
+                ta.show_output(err)
         except Exception as e:
-            log.write(f"[red]{e}[/red]")
+            ta.show_output(str(e))
+
+        ta.show_new_prompt()
 
     # ── Data ─────────────────────────────────────────────────────────────────
 
@@ -1019,28 +1126,6 @@ class CipherfallTUI(App):
         focused = self.focused
         inp_id  = getattr(focused, "id", None) if focused else None
 
-        if inp_id == "term-input":
-            inp = self.query_one("#term-input", Input)
-            if event.key == "up":
-                if not self._terminal_history:
-                    return
-                self._terminal_history_idx = min(
-                    self._terminal_history_idx + 1, len(self._terminal_history) - 1
-                )
-                inp.value = self._terminal_history[self._terminal_history_idx]
-                inp.cursor_position = len(inp.value)
-                event.prevent_default()
-            elif event.key == "down":
-                if self._terminal_history_idx <= 0:
-                    self._terminal_history_idx = -1
-                    inp.value = ""
-                    return
-                self._terminal_history_idx -= 1
-                inp.value = self._terminal_history[self._terminal_history_idx]
-                inp.cursor_position = len(inp.value)
-                event.prevent_default()
-            return
-
         if inp_id != "cmd-input":
             return
         inp = self.query_one("#cmd-input", Input)
@@ -1090,19 +1175,6 @@ class CipherfallTUI(App):
             self.query_one("#cmd-hint", Static).update("")
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "term-input":
-            cmd = event.value.strip()
-            event.input.value = ""
-            if not cmd:
-                return
-            if not self._terminal_history or self._terminal_history[0] != cmd:
-                self._terminal_history.insert(0, cmd)
-                if len(self._terminal_history) > 100:
-                    self._terminal_history.pop()
-            self._terminal_history_idx = -1
-            await self._run_terminal_cmd(cmd)
-            return
-
         if event.input.id != "cmd-input":
             return
         cmd = event.value.strip()
