@@ -329,11 +329,51 @@ Variables `.env` utilisées : `C2_ADMIN_PORTS` (défaut `1338,1337`), `WORKER_UR
   r = refresh   d = supprimer agent   q = quitter
 ```
 
-L'onglet **Payload** génère un agent personnalisé selon le type choisi :
-- **cloudflare** : bake `cloudflare-worker/nullrelay.py` avec `WORKER_URL` et `C2_PSK`
-- **ntp** : bake `ntp/clockvenom.py` avec `C2_PSK`, intervalle et jitter (pas de WORKER URL)
+### Onglet Graphe
 
-Les deux modes supportent l'obfuscation automatique via `shadowscript.py`.
+Arbre ASCII représentant la topologie C2 en temps réel. Auto-refresh toutes les 5 s.
+
+```
+╭──────────────────────────────────────────────╮
+│  ◉  C2 SERVER  127.0.0.1:1337               │
+│  2 active  ·  1 offline                      │
+╰──────────────────────────────────────────────╯
+
+├── ● 3685e93a  debian-vm    relay:443   (CF)
+│     └── ● 9a1fc221  lateral-1   via relay  (CF)
+└── ◆ a0b2c3d4  ntp-target              (NTP)
+
+── offline ────────────────────────────────────
+    ✕ dead1234  old-host    last: 8 min ago
+```
+
+Règles de placement :
+- **Relay node** (`relay_port > 0`) : placé en Layer-1, ses fils (agents dont `WORKER_URL` pointe vers l'IP:port du relay) sont affichés en dessous.
+- **Direct agents** : connectés directement au Worker Cloudflare ou au serveur NTP.
+- **Orphelins** : agent avec un `WORKER_URL` différent → rattaché au relay qui correspond, sinon affiché seul en Layer-1.
+- **Dead** : agent inactif depuis plus de `max(beacon_int × 5, 30)` secondes → section offline séparée.
+
+### Onglet Payload
+
+Génère un agent Python prêt à déployer avec les constantes baked dedans.
+
+| Champ | Description |
+|---|---|
+| AGENT TYPE | `cloudflare` → `nullrelay.py` / `ntp` → `clockvenom.py` |
+| WORKER URL | URL du Worker CF (cloudflare uniquement) |
+| C2 PSK | Clé partagée — doit correspondre au serveur |
+| BEACON (s) | Intervalle de beacon (bake en `C2_INT`) |
+| JITTER (s) | Jitter aléatoire ±N secondes (bake en `C2_JITTER`) |
+| VIA RELAY | Active les champs relay ci-dessous |
+| RELAY PORT | (CF) port TCP du relay — bake en `RELAY_PORT` |
+| RELAY HOST | (NTP) IP du relay — bake en `C2_DIRECT`, bypass DNS |
+| RELAY PORT | (NTP) port TCP du relay — bake en `TCP_PORT` |
+| OBFUSCATION | Passe l'agent par `shadowscript.py` après bake |
+| OUTPUT FILE | Chemin de sortie (relatif à `Modules/C2/`) |
+
+Cliquer **GENERATE PAYLOAD** écrit le fichier baked (et obfusqué si activé) sur disque. Le chemin final est affiché dans la statusbar.
+
+> **Option VIA RELAY (NTP)** : bake `C2_DIRECT=<relay_host>` dans clockvenom.py — l'agent se connecte directement à cette IP sans résoudre le domaine NTP. Utile si `/etc/hosts` n'est pas encore compromis mais qu'un relay est accessible.
 
 ### Commandes spéciales (`/module`)
 
