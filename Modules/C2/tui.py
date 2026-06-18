@@ -1183,7 +1183,7 @@ class CipherfallTUI(App):
     async def _spawn_root_agent(self, agent_id: str, tag: str, exploit: str = "") -> None:
         log = self.query_one("#output-log", OutputTextArea)
         bd  = f"/tmp/.b{tag}"
-        shell_root = "unshare --user --map-root-user --net -- bash" if exploit == "fragnesia" else f"{bd} -p"
+        shell_root = "unshare --user --map-root-user -- bash" if exploit == "fragnesia" else f"{bd} -p"
         base_url = self._agent_base.get(agent_id, BASE)
         try:
             async with httpx.AsyncClient() as c:
