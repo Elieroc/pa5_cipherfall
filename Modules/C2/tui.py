@@ -1418,7 +1418,7 @@ class CipherfallTUI(App):
                     self._root_spawned.add(task_id)
                     exploit = px.get("exploit", "")
                     if exploit == "fragnesia":
-                        log.write("[bold green]user namespace root — spawning agent in namespace…[/bold green]")
+                        log.write("[bold green]user namespace root (uid=0 in ns, real uid unchanged) — spawning agent… chain with dirtyfrag for host root[/bold green]")
                     else:
                         log.write("[bold green]root obtained — SUID bash planted — spawning root agent…[/bold green]")
                     asyncio.create_task(self._spawn_root_agent(px["agent_id"], px["tag"], exploit))
