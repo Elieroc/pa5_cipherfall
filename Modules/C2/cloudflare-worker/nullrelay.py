@@ -447,8 +447,9 @@ def _sysinfo() -> dict:
         "cwd":        os.getcwd(),
         "relay_port": RELAY_PORT if _relay_server else 0,
         "relay_host": _get_lan_ip() if _relay_server else "",
-        "worker_url": WORKER_URL,
-        "beacon_int": BEACON_INT,
+        "worker_url":    WORKER_URL,
+        "beacon_int":    BEACON_INT,
+        "beacon_jitter": JITTER,
     }
 
 

