@@ -1560,23 +1560,34 @@ class CipherfallTUI(App):
             event.prevent_default()
         elif event.key == "tab":
             v = inp.value
-            if v in self._autocomplete_matches:
-                self._autocomplete_idx = (self._autocomplete_idx + 1) % len(self._autocomplete_matches)
-            else:
-                self._autocomplete_matches = [c for c in _COMPLETIONS if c.startswith(v)]
-                self._autocomplete_idx = 0
+            matches = [c for c in _COMPLETIONS if c.startswith(v)]
             hint = self.query_one("#cmd-hint", Static)
-            if not self._autocomplete_matches:
+            if not matches:
                 hint.update("")
                 event.prevent_default()
                 return
-            inp.value = self._autocomplete_matches[self._autocomplete_idx]
-            inp.cursor_position = len(inp.value)
-            n = len(self._autocomplete_matches)
-            if n > 1:
-                hint.update(f"↹  {inp.value}  [{self._autocomplete_idx + 1}/{n}]")
+            import os as _os
+            lcp = _os.path.commonprefix(matches)
+            if not lcp.endswith(" ") and len(lcp) > len(v):
+                last_sp = lcp.rfind(" ", len(v))
+                if last_sp >= len(v):
+                    lcp = lcp[:last_sp + 1]
+            if len(lcp) > len(v):
+                inp.value = lcp
+                inp.cursor_position = len(lcp)
+                self._autocomplete_matches = []
+                self._autocomplete_idx = -1
+                hint.update(f"↹  {len(matches)} option{'s' if len(matches) > 1 else ''}")
             else:
-                hint.update("")
+                if v in self._autocomplete_matches and self._autocomplete_idx >= 0:
+                    self._autocomplete_idx = (self._autocomplete_idx + 1) % len(self._autocomplete_matches)
+                else:
+                    self._autocomplete_matches = matches
+                    self._autocomplete_idx = 0
+                inp.value = self._autocomplete_matches[self._autocomplete_idx]
+                inp.cursor_position = len(inp.value)
+                n = len(self._autocomplete_matches)
+                hint.update(f"↹  {inp.value}  [{self._autocomplete_idx + 1}/{n}]" if n > 1 else "")
             event.prevent_default()
 
     def on_input_changed(self, event: Input.Changed) -> None:
