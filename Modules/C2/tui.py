@@ -480,9 +480,27 @@ class OutputTextArea(TextArea):
 
     BINDINGS = [Binding("ctrl+shift+c", "copy", description="Copy selection", show=False)]
 
+    _presaved_selection = None
+
     def on_key(self, event) -> None:
         if event.key == "ctrl+c":
             event.prevent_default()
+
+    def clear(self) -> "EditResult":
+        self._presaved_selection = self.selection
+        result = super().clear()
+        self.call_after_refresh(self._restore_selection)
+        return result
+
+    def _restore_selection(self) -> None:
+        sel = self._presaved_selection
+        if sel is None or sel.start == sel.end:
+            return
+        try:
+            self.selection = sel
+        except Exception:
+            pass
+        self._presaved_selection = None
 
     def write(self, markup: str) -> None:
         plain = _RICH_TAG_RE.sub("", markup)
