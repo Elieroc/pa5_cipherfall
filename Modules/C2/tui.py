@@ -163,7 +163,10 @@ def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
         t.append(f"  {_ago(a['last_seen'])}", style="dim red")
         return
 
-    if tag == "RELAY":
+    is_relay_node = tag == "RELAY"
+    dot = "◆" if is_relay_node else "■"
+
+    if is_relay_node:
         dot_s  = "yellow bold"
         type_s = "yellow bold"
     elif atype == "cf":
@@ -175,7 +178,7 @@ def _agent_line(t: Text, a: dict, info: dict, *, tag: str = "",
 
     type_l = " CF " if atype == "cf" else " NTP"
 
-    t.append("◆ ", style=dot_s)
+    t.append(f"{dot} ", style=dot_s)
     t.append(f"{(a.get('label') or '—'):<14}", style="bold white")
     t.append(f"[{a['id'][:8]}]", style="dim")
     t.append(f"  {type_l}", style=type_s)
@@ -300,12 +303,12 @@ def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = 
             t.append("\n")
 
     t.append("\n")
-    t.append("  ◆ ", style="bright_cyan bold")
+    t.append("  ◆ ", style="yellow bold")
+    t.append("relay node", style="yellow")
+    t.append("   ■ ", style="bright_cyan bold")
     t.append("CF", style="bold cyan")
-    t.append("   ◆ ", style="bright_yellow bold")
+    t.append("   ■ ", style="bright_yellow bold")
     t.append("NTP", style="bold yellow")
-    t.append("   ◆ ", style="yellow bold")
-    t.append("relay", style="yellow")
     t.append("   ✗ ", style="dim red")
     t.append("offline", style="dim white")
 
