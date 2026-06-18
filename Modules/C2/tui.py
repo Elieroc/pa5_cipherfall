@@ -23,6 +23,7 @@ import asyncio, base64, gzip, json, os, pathlib, re, shutil, subprocess, sys, te
 from rich.text import Text
 from dotenv import load_dotenv
 from textual.app import App, ComposeResult
+from textual.message import Message
 from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical, VerticalScroll
