@@ -936,6 +936,7 @@ class CipherfallTUI(App):
     _recon_tasks:       dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path}
     _suicide_tasks:     dict[str, str]  = {}  # task_id -> agent_id
     _privesc_tasks:     dict[str, dict] = {}  # task_id -> {exploit, agent_id, tag}
+    _root_spawned:      set[str]        = set()  # task_ids that already triggered _spawn_root_agent
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -1302,7 +1303,8 @@ class CipherfallTUI(App):
             out = task.get("output") or ""
             if out:
                 log.write_raw(out.strip())
-                if "[privesc:ok]" in out:
+                if "[privesc:ok]" in out and task_id not in self._root_spawned:
+                    self._root_spawned.add(task_id)
                     log.write("[bold green]root obtained — SUID bash planted — spawning root agent…[/bold green]")
                     asyncio.create_task(self._spawn_root_agent(px["agent_id"], px["tag"]))
                 elif "[ssh-keysign:ok]" in out:
