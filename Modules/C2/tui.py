@@ -13,6 +13,8 @@ Usage:
 
 Keys:
     Enter   select agent / task, submit command
+    Tab     autocomplete /module commands (cycle on repeated press)
+    ↑/↓     navigate command history
     r       force refresh
     q       quit
 """
@@ -371,8 +373,14 @@ TabbedContent > TabPane { padding: 0; height: 1fr; }
 #output-log   { height: 1fr; padding: 0 1; }
 
 #cmd-input {
-    margin: 1 1 1 1;
+    margin: 1 1 0 1;
     border: solid #388bfd;
+}
+#cmd-hint {
+    height: 1;
+    padding: 0 2;
+    color: #484f58;
+    margin: 0 1 1 1;
 }
 
 /* ── Payload tab ── */
@@ -445,6 +453,26 @@ Label {
 }
 """
 
+_COMPLETIONS: list[str] = [
+    "/module ghost on",
+    "/module ghost off",
+    "/module ghost status",
+    "/module heartbeat ",
+    "/module heartbeat status",
+    "/module recon",
+    "/module recon --obfuscate",
+    "/module recon --delayer ",
+    "/module recon --renamer",
+    "/module recon --obfuscate --delayer ",
+    "/module recon --obfuscate --renamer",
+    "/module relay",
+    "/module relay start",
+    "/module relay start ",
+    "/module upload ",
+    "/module download ",
+    "/module suicide",
+]
+
 
 class CipherfallTUI(App):
     TITLE = "CIPHERFALL C2"
@@ -458,8 +486,10 @@ class CipherfallTUI(App):
 
     _selected_agent: str | None = None
     _selected_task:  str | None = None
-    _cmd_history: list[str] = []
-    _history_idx: int = -1
+    _cmd_history:          list[str] = []
+    _history_idx:          int       = -1
+    _autocomplete_matches: list[str] = []
+    _autocomplete_idx:     int       = -1
     _agent_base: dict[str, str] = {}   # agent_id -> base URL
     _agents_data: dict[str, dict] = {}  # agent_id -> agent dict (includes sysinfo)
     _download_tasks:    dict[str, dict] = {}  # task_id -> {type, ...}
@@ -488,6 +518,7 @@ class CipherfallTUI(App):
                             yield Label(" OUTPUT")
                             yield RichLog(id="output-log", highlight=True, markup=True)
                     yield Input(placeholder="select an agent first", id="cmd-input")
+                    yield Static("", id="cmd-hint")
 
             with TabPane("Graphe", id="tab-graph"):
                 with VerticalScroll(id="graph-scroll"):
@@ -864,6 +895,34 @@ class CipherfallTUI(App):
             inp.value = self._cmd_history[self._history_idx]
             inp.cursor_position = len(inp.value)
             event.prevent_default()
+        elif event.key == "tab":
+            v = inp.value
+            if v in self._autocomplete_matches:
+                self._autocomplete_idx = (self._autocomplete_idx + 1) % len(self._autocomplete_matches)
+            else:
+                self._autocomplete_matches = [c for c in _COMPLETIONS if c.startswith(v)]
+                self._autocomplete_idx = 0
+            hint = self.query_one("#cmd-hint", Static)
+            if not self._autocomplete_matches:
+                hint.update("")
+                event.prevent_default()
+                return
+            inp.value = self._autocomplete_matches[self._autocomplete_idx]
+            inp.cursor_position = len(inp.value)
+            n = len(self._autocomplete_matches)
+            if n > 1:
+                hint.update(f"↹  {inp.value}  [{self._autocomplete_idx + 1}/{n}]")
+            else:
+                hint.update("")
+            event.prevent_default()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "cmd-input":
+            return
+        if self._autocomplete_matches and event.value not in self._autocomplete_matches:
+            self._autocomplete_matches = []
+            self._autocomplete_idx = -1
+            self.query_one("#cmd-hint", Static).update("")
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "cmd-input":
@@ -872,6 +931,9 @@ class CipherfallTUI(App):
         if not cmd or not self._selected_agent:
             return
         event.input.value = ""
+        self.query_one("#cmd-hint", Static).update("")
+        self._autocomplete_matches = []
+        self._autocomplete_idx = -1
         if not self._cmd_history or self._cmd_history[0] != cmd:
             self._cmd_history.insert(0, cmd)
             if len(self._cmd_history) > 100:
