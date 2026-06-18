@@ -20,7 +20,6 @@ Keys:
 """
 
 import asyncio, base64, gzip, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time, uuid
-from rich.markup import escape as _escape
 from rich.text import Text
 from dotenv import load_dotenv
 from textual.app import App, ComposeResult
@@ -29,7 +28,7 @@ from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Button, DataTable, Footer, Header, Input,
-    Label, RichLog, Select, Static, Switch, TabbedContent, TabPane,
+    Label, Select, Static, Switch, TabbedContent, TabPane, TextArea,
 )
 import httpx
 
@@ -370,7 +369,21 @@ TabbedContent > TabPane { padding: 0; height: 1fr; }
 
 #agents-table { height: 1fr; }
 #tasks-table  { height: 10; border-bottom: solid #30363d; }
-#output-log   { height: 1fr; padding: 0 1; }
+#output-log {
+    height: 1fr;
+    padding: 0 0;
+    background: #0d1117;
+    border: none;
+}
+#output-log:focus {
+    border: none;
+}
+OutputTextArea > .text-area--cursor-line {
+    background: #161b22;
+}
+OutputTextArea > .text-area--selection {
+    background: #1f6feb 50%;
+}
 
 #cmd-input {
     margin: 1 1 0 1;
@@ -453,6 +466,35 @@ Label {
 }
 """
 
+_RICH_TAG_RE = re.compile(
+    r'\[/?(?:bold|italic|dim|underline|blink|reverse|strike|'
+    r'red|green|yellow|blue|cyan|magenta|white|black|'
+    r'bright_\w+|on_\w+|#[0-9a-fA-F]{3,6})'
+    r'(?:\s+\w+)*\]',
+    re.I,
+)
+
+
+class OutputTextArea(TextArea):
+    """Read-only TextArea drop-in for RichLog — strips Rich markup, supports text selection."""
+
+    BINDINGS = [Binding("ctrl+shift+c", "copy", description="Copy selection", show=False)]
+
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+c":
+            event.prevent_default()
+
+    def write(self, markup: str) -> None:
+        plain = _RICH_TAG_RE.sub("", markup)
+        self.insert(plain + "\n", location=self.document.end)
+        self.scroll_end(animate=False)
+
+    def write_raw(self, text: str) -> None:
+        t = text if text.endswith("\n") else text + "\n"
+        self.insert(t, location=self.document.end)
+        self.scroll_end(animate=False)
+
+
 _COMPLETIONS: list[str] = [
     "/module ghost on",
     "/module ghost off",
@@ -470,6 +512,8 @@ _COMPLETIONS: list[str] = [
     "/module relay start ",
     "/module upload ",
     "/module download ",
+    "/module save",
+    "/module save ",
     "/module suicide",
 ]
 
@@ -516,7 +560,8 @@ class CipherfallTUI(App):
                             yield DataTable(id="tasks-table", cursor_type="row",
                                             zebra_stripes=True)
                             yield Label(" OUTPUT")
-                            yield RichLog(id="output-log", highlight=True, markup=True)
+                            yield OutputTextArea("", id="output-log", read_only=True,
+                                                show_line_numbers=False)
                     yield Input(placeholder="select an agent first", id="cmd-input")
                     yield Static("", id="cmd-hint")
 
@@ -685,7 +730,7 @@ class CipherfallTUI(App):
         except Exception:
             return
 
-        log = self.query_one("#output-log", RichLog)
+        log = self.query_one("#output-log", OutputTextArea)
         log.clear()
         log.write(f"[bold cyan]$ {task['command']}[/bold cyan]")
 
@@ -710,14 +755,14 @@ class CipherfallTUI(App):
                 except Exception as e:
                     log.write(f"[red]exec dispatch error: {e}[/red]")
             elif out:
-                log.write(f"[red]upload error: {_escape(out[:200])}[/red]")
+                log.write(f"[red]upload error: {out[:200]}[/red]")
             else:
                 log.write("[dim]uploading script…[/dim]")
             return
         if rc and rc["type"] == "recon_exec":
             out = task.get("output") or ""
             if out:
-                log.write(f"[green]{_escape(out.strip())}[/green]")
+                log.write_raw(out.strip())
             else:
                 log.write("[dim]running recon…[/dim]")
             return
@@ -726,7 +771,7 @@ class CipherfallTUI(App):
         if si is not None:
             out = task.get("output") or ""
             if out:
-                log.write(f"[red]{_escape(out.strip())}[/red]")
+                log.write_raw(out.strip())
                 if "[suicide: ok]" in out:
                     log.write("[yellow]agent dead — removing from DB…[/yellow]")
                     try:
@@ -749,7 +794,7 @@ class CipherfallTUI(App):
         dl = self._download_tasks.get(task_id)
         if dl is None:
             if task.get("output"):
-                log.write(_escape(task["output"]))
+                log.write_raw(task["output"])
             else:
                 log.write("[dim]waiting for output…[/dim]")
         elif dl["type"] == "direct":
@@ -762,7 +807,7 @@ class CipherfallTUI(App):
                     log.write(f"[green]saved  {dl['remote_path']}  →  {dl['local_path']}  ({len(data)} bytes)[/green]")
                 except Exception as e:
                     log.write(f"[red]decode error: {e}[/red]")
-                    log.write(_escape(task["output"][:400]))
+                    log.write_raw(task["output"][:400])
             else:
                 log.write("[dim]waiting for output…[/dim]")
         elif dl["type"] == "count":
@@ -777,7 +822,7 @@ class CipherfallTUI(App):
                 try:
                     total = int(task["output"].strip())
                 except ValueError:
-                    log.write(f"[red]count error: {_escape(task['output'][:200])}[/red]")
+                    log.write(f"[red]count error: {task['output'][:200]}[/red]")
                     return
                 session["total"]  = total
                 session["queued"] = True
@@ -852,7 +897,7 @@ class CipherfallTUI(App):
                 if self._selected_task and (
                     self._download_tasks.get(self._selected_task, {}).get("session_id") == session_id
                 ):
-                    log = self.query_one("#output-log", RichLog)
+                    log = self.query_one("#output-log", OutputTextArea)
                     log.clear()
                     log.write(f"[bold cyan]$ [download {session['remote_path']}][/bold cyan]")
                     log.write(f"[green]saved  {session['remote_path']}  →  {session['local_path']}  ({len(data)} bytes)[/green]")
@@ -939,7 +984,7 @@ class CipherfallTUI(App):
             if len(self._cmd_history) > 100:
                 self._cmd_history.pop()
         self._history_idx = -1
-        log = self.query_one("#output-log", RichLog)
+        log = self.query_one("#output-log", OutputTextArea)
         _download_local  = ""
         _download_remote = ""
         _is_ntp          = False
@@ -1063,6 +1108,71 @@ class CipherfallTUI(App):
                     cmd = f"/module relay start 123 {_C2_HOST}:443"
                 elif len(parts) == 4 and parts[2] == "start":
                     cmd = f"/module relay start {parts[3]} {_C2_HOST}:443"
+        elif cmd.startswith("/module save"):
+            parts    = cmd.split(None, 2)
+            agent_id = self._selected_agent
+            a_data   = self._agents_data.get(agent_id, {})
+            label    = a_data.get("label") or agent_id[:8]
+            if len(parts) >= 3:
+                out_path = pathlib.Path(parts[2]).expanduser()
+            else:
+                logs_dir = HERE / "logs"
+                logs_dir.mkdir(exist_ok=True)
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_path = logs_dir / f"{agent_id[:8]}_{ts}.log"
+            base_url = self._agent_base.get(agent_id, BASE)
+            try:
+                async with httpx.AsyncClient() as c:
+                    r          = await c.get(f"{base_url}/admin/tasks", timeout=5)
+                    all_tasks  = [t for t in r.json() if t["agent_id"] == agent_id]
+                    done_tasks = [t for t in all_tasks if t["status"] == "done"]
+                    results    = []
+                    for task in done_tasks:
+                        try:
+                            rr = await c.get(f"{base_url}/admin/result/{task['id']}", timeout=5)
+                            results.append(rr.json())
+                        except Exception:
+                            results.append(task)
+            except Exception as e:
+                log.write(f"[red]save error: {e}[/red]")
+                return
+            sep  = "=" * 71
+            dash = "-" * 71
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            lines = [
+                sep,
+                " CIPHERFALL C2 — SESSION LOG",
+                sep,
+                f" Agent    : {agent_id[:8]}  ({label})",
+                f" Saved    : {now_str}",
+                f" Tasks    : {len(all_tasks)} total  |  {len(results)} with output",
+                sep,
+                "",
+            ]
+            for i, task in enumerate(results, 1):
+                sent_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(task["created_at"])) if task.get("created_at") else "—"
+                recv_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(task["completed_at"])) if task.get("completed_at") else "—"
+                output   = (task.get("output") or "").rstrip("\n")
+                lines += [
+                    "",
+                    dash,
+                    f" [{i}/{len(results)}]  {task['id']}",
+                    dash,
+                    f" Command  : {task['command']}",
+                    f" Sent     : {sent_str}",
+                    f" Received : {recv_str}",
+                    dash,
+                    "",
+                    output,
+                    "",
+                ]
+            try:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text("\n".join(lines), encoding="utf-8")
+                log.write(f"[green]saved {len(results)} task(s) → {out_path}[/green]")
+            except Exception as e:
+                log.write(f"[red]write error: {e}[/red]")
+            return
         elif cmd == "/module suicide":
             agent_id = self._selected_agent
             if not agent_id:
@@ -1084,12 +1194,12 @@ class CipherfallTUI(App):
                         result = r.json()
                     self._suicide_tasks[result["task_id"]] = agent_id
                     self._selected_task = result["task_id"]
-                    self.query_one("#output-log", RichLog).write(
+                    self.query_one("#output-log", OutputTextArea).write(
                         "[yellow]suicide dispatched — agent will self-destruct…[/yellow]"
                     )
                     await self._load_tasks(agent_id)
                 except Exception as e:
-                    self.query_one("#output-log", RichLog).write(f"[red]error: {e}[/red]")
+                    self.query_one("#output-log", OutputTextArea).write(f"[red]error: {e}[/red]")
 
             self.push_screen(ConfirmModal(f"Suicide  {label}?  [wipe agent + traces]"), on_suicide_confirm)
             return
@@ -1103,7 +1213,7 @@ class CipherfallTUI(App):
                 )
                 result = r.json()
         except Exception as e:
-            self.query_one("#output-log", RichLog).write(f"[red]error: {e}[/red]")
+            self.query_one("#output-log", OutputTextArea).write(f"[red]error: {e}[/red]")
             return
 
         self._selected_task = result["task_id"]
@@ -1234,7 +1344,7 @@ class CipherfallTUI(App):
                 self._selected_agent = None
                 self._selected_task  = None
                 self.query_one("#cmd-input", Input).placeholder = "select an agent first"
-                self.query_one("#output-log", RichLog).clear()
+                self.query_one("#output-log", OutputTextArea).clear()
             self.query_one("#tasks-table", DataTable).clear()
             self.query_one("#agents-table", DataTable).clear()
             await self._load_agents()
