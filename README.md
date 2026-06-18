@@ -18,7 +18,8 @@ L'objectif est académique et défensif : comprendre les techniques offensives r
 | **ClockVenom** | C2 NTP | `ntp/clockvenom.py` | Agent C2 dissimulé dans le trafic NTP légitime | Beacon UDP/123 (fallback TCP/443), extension NTS Cookie RFC 8915, chiffrement AES-256-GCM + zlib, résolution DNS redirigée par IronVeil |
 | **ShadowDrop** | Dropper | `shadowdrop_bin.py` / `shadowdrop_sh.py` / `shadowdrop_py.py` | Exécution fileless de payloads via `memfd_create` | Téléchargement sans écriture disque, exécution directe depuis un fd mémoire, support binaires ELF / scripts Bash / scripts Python, mode daemon double-fork |
 | **PhantomPage** | Phishing | `deviceflowbypass2fa/phantompage.py` | Bypass 2FA Microsoft via OAuth device authorization flow | Proxy du flow device Microsoft, capture de tokens access + refresh, page de phishing Outlook, `offline_access` pour tokens longue durée |
-| **IronVeil** | Rootkit LKM | `ironveil.c` | Rootkit noyau Linux injectant et dissimulant le C2 NTP | Injection `/etc/hosts` (redirect NTP → C2), hook `read()` filtrant les entrées C2, masquage fichiers/PIDs, self-hide `lsmod`, interface `/proc/rootkit_ctrl` |
+| **IronVeil** | Rootkit LKM | `ironveil.c` / `ironveil_compiler.py` | Rootkit noyau Linux injectant et dissimulant le C2 NTP | Injection `/etc/hosts` (redirect NTP → C2), hook `read()` filtrant les entrées C2, masquage fichiers/PIDs, self-hide `lsmod`, dead-drop resolver (PNG stéganographique → payload fileless), cross-compilation Docker pour Debian/Ubuntu/Arch/Fedora/RHEL |
+| **Stégano** | Stéganographie | `stego_embed.py` | Dissimulation d'URL de payload dans une image PNG publique | Embedding dans chunk `tEXt` PNG (RFC 2083), XOR-chiffrement 16 octets, extraction automatique par IronVeil dead-drop resolver ; image indiscernable de l'original |
 | **EchoErase** | Anti-forensics | `echoerase_ghost.sh` / `echoerase_delayer.sh` / `echoerase_renamer.py` | Suite d'outils d'effacement des traces opérationnelles | Ghost shell (utmp/wtmp, lastlog, auditd, env scrub), injection de délais aléatoires entre commandes, renommage de fichiers (base64 réversible ou CSPRNG irréversible) |
 
 ### Modules Privesc
@@ -140,9 +141,13 @@ Modules/
 │       └── phantompage.py
 ├── Rootkits/
 │   ├── ironveil.c
+│   ├── ironveil_compiler.py
 │   ├── Makefile
 │   └── manual.md
+├── Stégano/
+│   └── stego_embed.py
 ├── Privesc/
+│   ├── copyfail.py
 │   ├── dirtyfrag/
 │   ├── ssh-keysign-pwn/
 │   └── fragnesia.sh
@@ -169,10 +174,18 @@ Les colonnes correspondent aux tactiques ATT&CK Enterprise couvertes par le proj
 | ShadowDrop     | —  | —  | ✓  | —  | ✓  | —  | —  | —  | —  |
 | PhantomPage    | —  | ✓  | —  | —  | —  | ✓  | —  | —  | —  |
 | IronVeil       | —  | —  | —  | —  | ✓  | —  | —  | ✓  | —  |
+| Stégano        | —  | —  | —  | —  | ✓  | —  | —  | ✓  | —  |
 | EchoErase      | —  | —  | —  | —  | ✓  | —  | —  | —  | —  |
 | Privesc        | —  | —  | —  | ✓  | —  | —  | —  | —  | —  |
 
 **Tactiques non couvertes :** Resource Development (TA0042), Persistence (TA0003), Lateral Movement (TA0008), Collection (TA0009), Impact (TA0040).
+
+#### Stégano — Defense Evasion (TA0005) + Command and Control (TA0011)
+
+| ID | Technique |
+|---|---|
+| T1027.003 | Obfuscated Files: Steganography (payload URL dissimulé dans chunk tEXt PNG) |
+| T1102 | Web Service (image publique utilisée comme dead-drop one-way) |
 
 ---
 
@@ -268,8 +281,8 @@ Les colonnes correspondent aux tactiques ATT&CK Enterprise couvertes par le proj
 | Métrique | Valeur |
 |---|---|
 | Tactiques couvertes | 7 / 14 |
-| Techniques uniques | 28 |
-| Modules offensifs | 9 |
+| Techniques uniques | 30 |
+| Modules offensifs | 10 |
 
 ## Ressources
 Voici différents articles qui nous ont aidé dans nos recherches pour le projet :
@@ -289,35 +302,36 @@ Les estimations sont approximatives : une partie des techniques était déjà co
 
 | Poste | Détail | Heures | Taux | Coût |
 |---|---|---:|---:|---:|
-| Recherche et veille | CVE, protocoles, techniques ATT&CK, outils existants | 20 h | 100 €/h | **2 000 €** |
+| Recherche et veille | CVE (DirtyFrag, CopyFail, CVE-2026-46300), protocoles (NTP/NTS, AES-GCM, PNG), techniques ATT&CK, stéganographie, outils existants | 30 h | 100 €/h | **3 000 €** |
 
 ---
 
 ### Développement
 
-Estimé à partir de l'analyse des commits GitHub, du volume de code par module (~6 400 lignes) et du temps de test en conditions réelles (VPS + VM Debian). L'abonnement Claude est inclus car l'IA a contribué au développement.
+Estimé à partir de l'analyse des commits GitHub (101 commits), du volume de code par module (~9 168 lignes) et du temps de test en conditions réelles (VPS + VM Debian). L'abonnement Claude est inclus car l'IA a contribué au développement.
 
 | Poste | Détail | Heures | Taux | Coût |
 |---|---|---:|---:|---:|
-| Développement | 9 modules offensifs + TUI + documentation | 175 h | 143 €/h | **25 000 €** |
+| Développement | 10 modules offensifs + TUI + documentation | 245 h | 143 €/h | **35 035 €** |
 | Outillage IA | Abonnement Claude (3 mois) | — | — | **33 €** |
 
 Répartition estimée par module :
 
 | Module | Complexité | Heures estimées |
 |---|---|---:|
-| IronVeil (rootkit LKM) | ★★★★★ | ~35 h |
-| NullRelay (C2 Cloudflare) | ★★★★ | ~25 h |
-| ClockVenom (C2 NTP) | ★★★★ | ~22 h |
+| IronVeil (rootkit LKM + compiler Docker) | ★★★★★ | ~50 h |
+| TUI + operator_cli | ★★★★ | ~35 h |
+| NullRelay (C2 Cloudflare) | ★★★★ | ~30 h |
+| ClockVenom (C2 NTP) | ★★★★ | ~27 h |
+| Privesc (4 exploits) | ★★★ | ~25 h |
+| Documentation + déploiement | ★★★ | ~25 h |
+| EchoErase (anti-forensics) | ★★★ | ~14 h |
 | ShadowScript (obfuscateur) | ★★★ | ~12 h |
-| EchoErase (anti-forensics) | ★★★ | ~13 h |
-| TUI + operator_cli | ★★★ | ~10 h |
-| Privesc (3 exploits) | ★★★ | ~15 h |
 | PhantomPage (phishing) | ★★★ | ~7 h |
+| Phantom Eye (recon) | ★★ | ~7 h |
+| Stégano (dead-drop PNG) | ★★ | ~8 h |
 | ShadowDrop (dropper) | ★★ | ~5 h |
-| Phantom Eye (recon) | ★★ | ~5 h |
-| Documentation + déploiement | ★ | ~16 h |
-| **Total** | | **~175 h** |
+| **Total** | | **~245 h** |
 
 ---
 
@@ -341,11 +355,11 @@ Le projet privilégie l'infrastructure publique et gratuite (Cloudflare, Let's E
 
 | Poste | Coût |
 |---|---:|
-| R&D | 2 000 € |
-| Développement | 25 033 € |
+| R&D | 3 000 € |
+| Développement | 35 068 € |
 | Infrastructure (1 an) | 132 € |
-| **Coût total projet** | **~27 165 €** |
+| **Coût total projet** | **~38 200 €** |
 
-En tenant compte des coûts totaux, des taxes et d'une marge commerciale raisonnable, le prix de vente estimé du produit est de **30 000 €**.
+En tenant compte des coûts totaux, des taxes et d'une marge commerciale raisonnable, le prix de vente estimé du produit est de **42 000 €**.
 
 > L'infrastructure représente moins de 0,3 % du coût total — l'essentiel de la valeur est dans l'expertise et le développement.
