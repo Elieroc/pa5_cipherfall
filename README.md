@@ -363,3 +363,9 @@ Le projet privilégie l'infrastructure publique et gratuite (Cloudflare, Let's E
 En tenant compte des coûts totaux, des taxes et d'une marge commerciale raisonnable, le prix de vente estimé du produit est de **42 000 €**.
 
 > L'infrastructure représente moins de 0,3 % du coût total — l'essentiel de la valeur est dans l'expertise et le développement.
+
+---
+
+## Retour sur Investissement (ROI)
+
+Le détail du calcul du ROI (vente unique, licences récurrentes, réduction du risque APT) est disponible dans le fichier [ROI.md](ROI.md).
