@@ -6,6 +6,8 @@ L'objectif est académique et défensif : comprendre les techniques offensives r
 
 > Tout le code est destiné à la recherche en sécurité autorisée et à des fins éducatives.
 
+
+Le github suivant est utilisé pour déployer l'implant (Intial acces) : https://github.com/venko-code/holehe_remastered
 ---
 
 ## Arsenal
