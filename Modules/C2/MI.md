@@ -24,31 +24,7 @@ Pour l'utilisation post-déploiement, voir [Manuel d'exploitation](./MEX.md).
 
 ### Architecture
 
-```
-  OPÉRATEUR                SERVEUR C2               CLOUDFLARE              VICTIME
-  (laptop)                 (laptop/VPS)              (Worker KV)             (cible)
-
-  operator_cli.py ──POST──► server.py
-                            [pending]
-                                │
-                                │ PUT /task/{agent_id}
-                                ▼
-                            server.py ◄──────────────► worker.js
-                            [sent]                      KV: task:{id}
-                                                            │
-                                                            │ GET /task/{id}
-                                                            ▼
-                                                        nullrelay.py
-                                                        [exécute cmd]
-                                                            │
-                                                            │ PUT /result/{task_id}
-                                                            ▼
-                            server.py ◄─────────────── worker.js
-                            [done]                      KV: result:{id}
-                                │
-  operator_cli.py ◄──GET──── server.py
-  [output affiché]
-```
+<p align="center"><img src="../../assets/c2-canal-cf.png" alt="Séquence Canal Cloudflare Worker"/></p>
 
 ### Étape 1 — Déployer le Worker Cloudflare
 
@@ -123,29 +99,7 @@ python3 ../../Obfuscator/shadowscript.py nullrelay.py
 
 ### Architecture
 
-```
-                         /etc/hosts (compromis par rootkit)
-  0.debian.pool.ntp.org  ──────────────────────► 87.106.187.97
-                                                  (VPS C2)
-
-  VICTIME                                          SERVEUR C2
-  clockvenom.py                                    ntp/server.py
-
-  1. résoud le domaine NTP                         UDP/123
-     → obtient l'IP du VPS (via /etc/hosts)    ┌──────────┐
-  2. envoie beacon NTP Mode-3                   │ NTP pkt  │
-     ┌──────────────────────────────────────────►  Mode-3  │
-     │  NTP header (48B)                        │  + ext   │
-     │  + NTS Cookie field (type 0x0104)        └────┬─────┘
-     │    └── AES-256-GCM(zlib(JSON beacon))         │
-     │                                               │ tâche en attente ?
-     │  NTP header (48B)                        ┌────▼─────┐
-     └──────────────────────────────────────────┤  NTP pkt │
-        + NTS Cookie field (si tâche présente)  │  Mode-4  │
-          └── AES-256-GCM(zlib(JSON task))      └──────────┘
-
-  Fallback : si UDP/123 bloqué → TCP/443 (même format, longueur préfixée)
-```
+<p align="center"><img src="../../assets/c2-canal-ntp.png" alt="Séquence Canal NTP C2"/></p>
 
 ### Prérequis
 
