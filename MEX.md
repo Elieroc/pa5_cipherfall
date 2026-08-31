@@ -1,12 +1,6 @@
 # Manuel d'exploitation — Cipherfall C2
 
-## Introduction
-
-Le C2 (Command & Control) est le centre opérationnel de Cipherfall. Toutes les opérations offensives transitent par lui : envoi de commandes aux agents déployés sur les cibles, collecte des résultats, exfiltration de données, escalade de privilèges, et effacement des traces. Deux canaux indépendants coexistent — Cloudflare Worker (HTTPS/443) et NTP C2 (UDP/123) — accessibles depuis la même interface opérateur.
-
-Ce document présente l'ensemble des fonctionnalités du C2 : interface en ligne de commande, TUI interactive, et commandes de module (`/module *`) couvrant la reconnaissance, le pivoting, la collecte de credentials, l'exfiltration et la gestion du cycle de vie des agents.
-
-Pour le déploiement de l'infrastructure, voir [Manuel d'installation](./Modules/C2/MI.md).
+Référence opérateur post-déploiement. Pour le déploiement de l'infrastructure, voir [Manuel d'installation](./Modules/C2/MI.md).
 
 ---
 
