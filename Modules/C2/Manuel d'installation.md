@@ -6,34 +6,7 @@ Deux canaux C2 indépendants. Même interface opérateur (`operator_cli.py`).
 
 ## Vue d'ensemble
 
-```
-                    ┌─────────────────────────────────────┐
-                    │           OPÉRATEUR                 │
-                    │  operator_cli.py / tui.py           │
-                    │  (machine locale, pas de port ouvert)│
-                    └───────────┬─────────────────────────┘
-                                │ admin API (localhost)
-                    ┌───────────▼─────────────────────────┐
-                    │           SERVEUR C2                │
-                    │  cloudflare-worker/server.py        │  ← canal 1
-                    │        ou                           │
-                    │  ntp/server.py                      │  ← canal 2
-                    └───────────┬─────────────────────────┘
-                                │
-              ┌─────────────────┼───────────────────┐
-              │ Canal 1         │                   │ Canal 2
-              ▼                 │                   ▼
-   ┌─────────────────┐          │        ┌──────────────────┐
-   │ Cloudflare KV   │          │        │  UDP/123 ou      │
-   │ (dead-drop)     │          │        │  TCP/443         │
-   └────────┬────────┘          │        └────────┬─────────┘
-            │                   │                 │
-            ▼                   │                 ▼
-   ┌─────────────────┐          │        ┌──────────────────┐
-   │   AGENT         │          │        │   AGENT NTP      │
-   │ (victime, HTTP) │          │        │ (victime, UDP)   │
-   └─────────────────┘          │        └──────────────────┘
-```
+<p align="center"><img src="../../assets/c2-arch.png" alt="Architecture C2"/></p>
 
 | | Canal Cloudflare Worker | Canal NTP |
 |---|---|---|
