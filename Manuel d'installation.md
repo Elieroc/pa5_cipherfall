@@ -1,3 +1,82 @@
+1.1 Objet du Document
+ 
+Ce manuel fournit les procédures détaillées et testées pour déployer **Cipherfall**, un framework pédagogique de cybersécurité offensive couvrant une chaîne d'attaque complète sur architecture Linux.
+ 
+Le document couvre :
+- Installation des dépendances et prérequis
+- Déploiement du serveur C2 (deux canaux : Cloudflare Worker D1 + NTP)
+- Génération et déploiement des agents malveillants
+- Configuration de l'environnement de test isolé
+- Vérification fonctionnelle de chaque composant
+- Nettoyage et désinstallation complète
+**Public cible** : Administrateurs système, étudiants en cybersécurité, instructeurs supervisant le déploiement en environnement de laboratoire autorisé.
+ 
+**Licence et Cadre** : Ce projet est fourni à titre pédagogique exclusivement dans le cadre d'un environnement de laboratoire isolé avec autorisation écrite explicite. Toute utilisation en dehors de ce périmètre est illégale (article 323 du Code pénal français).
+ 
+---
+ 
+### 1.2 Périmètre d'Installation
+ 
+#### Composants Couverts
+ 
+Ce manuel couvre l'installation **complète** de :
+ 
+| Composant | Variantes | Couverture |
+|-----------|-----------|-----------|
+| **C2 Server** | Cloudflare D1 ou NTP | Les deux canaux |
+| **Agents** | nullrelay.py (CF) / clockvenom.py (NTP) | Génération automatisée |
+| **Rootkit** | ironveil.ko (kernel module) | Compilation et chargement |
+| **Dropper** | shadowdrop (shell/binary/Python) | Optionnel, référencé |
+| **Obfuscateur** | shadowscript.py | Intégré au TUI |
+| **Reconnaissance** | phantom_eye.sh | Inclus, exécutable via C2 |
+| **Privesc** | copyfail, dirtyfrag, ssh-keysign | Via module C2 |
+| **Anti-forensique** | echoerase (ghost mode) | Intégré au C2 |
+| **Interface Opérateur** | operator_cli.py / tui.py | Interface commune |
+ 
+#### Composants **Optionnels** (Hors Scope)
+ 
+- Phishing (deviceflowbypass2fa) — implémentation 2FA bypass mais pas d'infrastructure mail
+- Stéganographie avancée — embed média dans images, références fournies
+- Firewall personnel — suppose firewall Linux hôte déjà configuré
+#### Environnement de Déploiement
+ 
+**Lab d'isolation requis** :
+- Réseau fermé (pas d'internet)
+- Firewall avec règle "DENY ALL OUTBOUND" par défaut
+- Machines virtuelles avec snapshots
+- Pas de données réelles ou sensibles
+- Destruction des artefacts après tests
+**Non couvert** : Déploiement en production ou contre cibles externes.
+ 
+---
+ 
+### 1.3 Durée Estimée
+ 
+#### Chronologie par Étape
+ 
+| Étape | Durée | Notes |
+|-------|-------|-------|
+| **Validation des prérequis** | 10 min | Vérifier Python, npm, git, VM setup |
+| **Installation dépendances** | 15 min | pip install, npm install |
+| **Setup Cloudflare (CF uniquement)** | 10 min | Créer compte, configurer D1 database |
+| **Déploiement Worker CF** | 5 min | wrangler deploy |
+| **Démarrage server C2** | 2 min | python3 server.py |
+| **Compilation rootkit** | 10 min | make, gcc |
+| **Génération agent(s)** | 5 min | TUI ou script |
+| **Déploiement agent(s) sur cible** | 5 min | Copy-paste, chmod, exécution |
+| **Tests unitaires** | 15 min | Vérifier beacon, tâche simple |
+| **Tests d'intégration** | 20 min | Commandes complexes, exfiltration |
+| **Validation finale** | 10 min | Checklist, logs complets |
+| | | |
+| **TOTAL (2 canaux)** | **107 min** | ~1h45 pour déploiement complet + tests |
+| **TOTAL (1 canal seul)** | **70 min** | ~1h10 si CF ou NTP uniquement |
+ 
+#### Variantes de Durée
+ 
+- **Déploiement minimal** (CF seul, 1 agent) : 45 min
+- **Lab complet** (CF + NTP + rootkit + multi-agents) : 2h30
+- **Redéploiement** (déjà configuré) : 20 min
+
 # Manuel de déploiement — Cipherfall C2
 
 Deux canaux C2 indépendants. Même interface opérateur (`operator_cli.py`).
@@ -6,7 +85,7 @@ Deux canaux C2 indépendants. Même interface opérateur (`operator_cli.py`).
 
 ## Vue d'ensemble
 
-<p align="center"><img src="../../assets/c2-arch.png" alt="Architecture C2"/></p>
+<p align="center"><img src="assets/c2-arch.png" alt="Architecture C2"/></p>
 
 | | Canal Cloudflare Worker | Canal NTP |
 |---|---|---|
