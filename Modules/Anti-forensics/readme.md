@@ -10,7 +10,9 @@ Encodage et Obfuscation : Transforme les noms de fichiers en chaînes de caract�
 Falsification : Change l'extension du fichier (un script exécutable se déguise en simple fichier texte ou de configuration).
 
 Furtivité : Transforme les outils en "fichiers cachés" au sein du système.
+
 Risque métier : Permet à un attaquant de cacher ses logiciels de piratage ou les données qu'il s'apprête à voler.
+
 Impact : Ralentit massivement le travail d'investigation des équipes d'analyses  en cas de cyberattaque.
 
 
@@ -22,7 +24,9 @@ Injection : Modifie automatiquement un script d'attaque pour insérer des pauses
 Aléatoire : Fait varier la durée des pauses pour ne pas créer de motif robotique détectable.
 
 Ciblage : Conçu spécifiquement pour étaler les scans réseau dans le temps (Low and Slow).
+
 Risque métier : Empêche le déclenchement des alertes de sécurité basées sur le volume (comme la détection de scans ou les pics de trafic).
+
 Impact : Une attaque normalement bruyante devient silencieuse et indétectable par nos sondes standards.
 
 
@@ -34,6 +38,8 @@ Aveuglement : Désactive ou suspend activement nos agents de sécurité locaux (
 Nettoyage chirurgical : Efface les traces de connexion (adresse IP, heure) dans les journaux système de la machine.
 
 Usurpation : Déguise le terminal de l'attaquant pour qu'il ressemble à un processus légitime du système d'exploitation (kworker).
+
 Risque métier : Permet des actions malveillantes en profondeur (vol de données, sabotage) en toute invisibilité.
+
 Impact : Rupture complète de la chaîne de traçabilité locale ; l'attaquant devient un fantôme sur le serveur.
 
