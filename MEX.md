@@ -1,5 +1,7 @@
 # Manuel d'exploitation — Cipherfall C2
 
+Ce document présente les fonctionnalités du **C2 (Command & Control)**, centre opérationnel de toutes les opérations Cipherfall. Le C2 orchestre l'ensemble des agents déployés sur les cibles, reçoit leurs beacons, dispatch les tâches et collecte les résultats — que ce soit via le canal Cloudflare Worker (HTTPS/443) ou le canal NTP (UDP/123 avec fallback TCP/443). C'est depuis ce composant que l'opérateur contrôle chaque phase de la kill chain.
+
 Référence opérateur post-déploiement. Pour le déploiement de l'infrastructure, voir [Manuel d'installation](./Modules/C2/MI.md).
 
 ---
