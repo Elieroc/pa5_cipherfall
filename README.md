@@ -55,11 +55,6 @@ La ligne lance le script suivant holehe.py qui est l'implant.
 
 
 
-**Comment le payload est t'il caché ?** 
-
-
-
-
 ### Modules Privesc
 
 Les modules de privilege escalation n'ont pas de nom de malware — ce sont des exploits de CVE spécifiques :
