@@ -7,18 +7,9 @@ L'objectif est académique et défensif : comprendre les techniques offensives r
 > Tout le code est destiné à la recherche en sécurité autorisée et à des fins éducatives.
 
 
-
-
-Le github suivant est utilisé pour déployer l'implant (Intial acces) : https://github.com/venko-code/holehe_remastered
-
-
 ---
 
 ## Arsenal
-
-### Initial Acess : 
-
-Le github suivant est utilisé pour déployer l'implant (Intial acces) : https://github.com/venko-code/holehe_remastered
 
 
 
@@ -35,6 +26,22 @@ Le github suivant est utilisé pour déployer l'implant (Intial acces) : https:/
 | **IronVeil** | Rootkit LKM | `ironveil.c` / `ironveil_compiler.py` | Rootkit noyau Linux injectant et dissimulant le C2 NTP | Injection `/etc/hosts` (redirect NTP → C2), hook `read()` filtrant les entrées C2, masquage fichiers/PIDs, self-hide `lsmod`, dead-drop resolver (PNG stéganographique → payload fileless), cross-compilation Docker pour Debian/Ubuntu/Arch/Fedora/RHEL |
 | **Stégano** | Stéganographie | `stego_embed.py` | Dissimulation d'URL de payload dans une image PNG publique | Embedding dans chunk `tEXt` PNG (RFC 2083), XOR-chiffrement 16 octets, extraction automatique par IronVeil dead-drop resolver ; image indiscernable de l'original |
 | **EchoErase** | Anti-forensics | `echoerase_ghost.sh` / `echoerase_delayer.sh` / `echoerase_renamer.py` | Suite d'outils d'effacement des traces opérationnelles | Ghost shell (utmp/wtmp, lastlog, auditd, env scrub), injection de délais aléatoires entre commandes, renommage de fichiers (base64 réversible ou CSPRNG irréversible) |
+
+### Initial Acess : 
+
+Le github suivant est utilisé pour déployer l'implant (Intial acces) : https://github.com/venko-code/holehe_remastered
+
+
+!(alt text)[img/img1]
+
+Il s'agit d'un clone du projet suivant : https://github.com/megadose/holehe
+
+
+
+**Comment le payload est t'il caché ?** 
+
+
+
 
 ### Modules Privesc
 
