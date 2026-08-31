@@ -74,7 +74,7 @@ Les modules de privilege escalation n'ont pas de nom de malware — ce sont des 
 ## Kill Chain
 
 <p align="center">
-  <img src="assets/kill-chain.png" alt="Kill Chain" width="960"/>
+  <img src="assets/kill-chain.png" alt="Kill Chain"/>
 </p>
 
 ### Flux complet (séquence opérationnelle)
@@ -141,7 +141,7 @@ Modules/
 ## Infrastructure Cible
 
 <p align="center">
-  <img src="assets/infra-cible.png" alt="Infrastructure Cible" width="600"/>
+  <img src="assets/infra-cible.png" alt="Infrastructure Cible"/>
 </p>
 ---
 
