@@ -16,7 +16,7 @@ Le github suivant est utilisé pour déployer l'implant (Intial acces) : https:/
 
 ## Arsenal
 
-### Initial Acess : 
+### Initial Acess : 
 
 Le github suivant est utilisé pour déployer l'implant (Intial acces) : https://github.com/venko-code/holehe_remastered
 
