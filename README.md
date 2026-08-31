@@ -192,9 +192,8 @@ Modules/
 ---
 
 ## Infrastructure Cible
-┌───────────────────────────────────┐
-│  CIPHERFALL — Architecture Cible  │
-└───────────────────────────────────┘
+
+CIPHERFALL — Architecture Cible
 
                           ┌──────────────┐
                     ┌────►│      OS      │
