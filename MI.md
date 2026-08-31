@@ -83,7 +83,7 @@ Ce manuel couvre l'installation **complète** de :
 L'implant s'installe sur la victime. Pour installer l'implant sur la victime, il faut choisir un projet GitHub et installer une backdoor. Il est nécessaire de choisir correctement le projet GitHub ; il doit pouvoir s'exécuter et se télécharger en Python. Dans la partie initial access du README.md, on retrouve un exemple avec le projet holehe. Le script d'installation exécute au passage l'implant et la machine est compromise. Pour plus de réussite, nous conseillons de réaliser un clonage du GitHub complet (ou un fork), d'entretenir le GitHub et de faire en sorte qu'il obtienne beaucoup d'étoiles.
 
 
-Pour installer le C2 et le worker cloudflare il faut suivre ce manuel. Une fois le C2 mis en place il faut se référer au Manuel d’exploitation.md pour obtenir tous les modules. 
+Pour installer le C2 et le worker cloudflare il faut suivre ce manuel. Une fois le C2 mis en place il faut se référer au [MEX.md](./MEX.md) pour obtenir tous les modules. 
 
 
 Deux canaux C2 indépendants. Même interface opérateur (`operator_cli.py`).
