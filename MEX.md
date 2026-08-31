@@ -1,6 +1,12 @@
 # Manuel d'exploitation — Cipherfall C2
 
-Référence opérateur post-déploiement. Pour le déploiement de l'infrastructure, voir [Manuel d'installation](./Manuel%20d'installation.md).
+## Introduction
+
+Le C2 (Command & Control) est le centre opérationnel de Cipherfall. Toutes les opérations offensives transitent par lui : envoi de commandes aux agents déployés sur les cibles, collecte des résultats, exfiltration de données, escalade de privilèges, et effacement des traces. Deux canaux indépendants coexistent — Cloudflare Worker (HTTPS/443) et NTP C2 (UDP/123) — accessibles depuis la même interface opérateur.
+
+Ce document présente l'ensemble des fonctionnalités du C2 : interface en ligne de commande, TUI interactive, et commandes de module (`/module *`) couvrant la reconnaissance, le pivoting, la collecte de credentials, l'exfiltration et la gestion du cycle de vie des agents.
+
+Pour le déploiement de l'infrastructure, voir [Manuel d'installation](./Modules/C2/MI.md).
 
 ---
 
@@ -84,7 +90,7 @@ Variables `.env` utilisées : `C2_ADMIN_PORTS` (défaut `1338,1337`), `WORKER_UR
 
 ### Onglet Agents
 
-<p align="center"><img src="../../assets/tui-agents.png" alt="TUI — onglet Agents"/></p>
+<p align="center"><img src="assets/tui-agents.png" alt="TUI — onglet Agents"/></p>
 
 Panel gauche : liste des agents (ID, label, dernière activité, user@host). Point vert = actif, rouge = inactif. Panel droit : tâches de l'agent sélectionné + output de la tâche sélectionnée. Barre du bas : champ de commande. Raccourcis : `r` refresh, `d` supprimer agent, `q` quitter.
 
@@ -92,7 +98,7 @@ Panel gauche : liste des agents (ID, label, dernière activité, user@host). Poi
 
 Topologie C2 en temps réel. Auto-refresh toutes les 5 s.
 
-<p align="center"><img src="../../assets/tui-graphe.png" alt="TUI — onglet Graphe"/></p>
+<p align="center"><img src="assets/tui-graphe.png" alt="TUI — onglet Graphe"/></p>
 
 Règles de placement :
 - **Relay node** (`relay_port > 0`) : placé en Layer-1, ses fils (agents dont `WORKER_URL` pointe vers l'IP:port du relay) affichés en dessous.
@@ -102,7 +108,7 @@ Règles de placement :
 
 ### Onglet Payload
 
-<p align="center"><img src="../../assets/tui-payload.png" alt="TUI — onglet Payload"/></p>
+<p align="center"><img src="assets/tui-payload.png" alt="TUI — onglet Payload"/></p>
 
 Génère un agent Python prêt à déployer avec les constantes baked dedans.
 

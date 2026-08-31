@@ -2,7 +2,7 @@
 
 Deux canaux C2 indépendants. Même interface opérateur (`operator_cli.py`).
 
-Pour l'utilisation post-déploiement, voir [Manuel d'exploitation](./Manuel%20d'exploitation.md).
+Pour l'utilisation post-déploiement, voir [Manuel d'exploitation](./MEX.md).
 
 ---
 
@@ -237,4 +237,4 @@ C2_PSK=... C2_INT=15 C2_JITTER=5 nohup python3 /tmp/clockvenom.py > /tmp/clockve
 ```
 
 
-> Pour le dépannage et l'utilisation de l'interface opérateur, voir [Manuel d'exploitation](./Manuel%20d'exploitation.md).
+> Pour le dépannage et l'utilisation de l'interface opérateur, voir [Manuel d'exploitation](./MEX.md).
