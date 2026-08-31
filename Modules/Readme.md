@@ -1,1 +1,1 @@
-# Présentation des modules : 
+Dans chacun des modules vous trouverez un readme.md qui comprends une explication des scripts du modules en se basant sur ses fonctionnalités, son risque métier et l'impact pour un système d'information.
