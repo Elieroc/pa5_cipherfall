@@ -1,4 +1,4 @@
-# Présentation du module de téganographie
+# Présentation du module de Stéganographie
 
 ### stego_embed.py 
 
