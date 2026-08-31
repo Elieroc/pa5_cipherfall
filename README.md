@@ -70,65 +70,7 @@ Les modules de privilege escalation n'ont pas de nom de malware — ce sont des 
 
 ## Kill Chain
 
-```
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │                          CIPHERFALL — Kill Chain                            │
-  └─────────────────────────────────────────────────────────────────────────────┘
-
-  ① RECONNAISSANCE          ② OBFUSCATION             ③ DELIVERY
-  ┌──────────────┐          ┌───────────────┐          ┌──────────────────┐
-  │ Phantom Eye  │          │  ShadowScript │          │  PhantomPage     │
-  │              │          │               │          │                  │
-  │ Collecte :   │          │ Obfusque :    │          │ Phishing :       │
-  │ - distro     │    ┌────►│ - payload     │          │ - device flow    │
-  │ - services   │    │     │ - agent C2    │          │ - token capture  │
-  │ - databases  │    │     │   (NullRelay/ │          └────────┬─────────┘
-  │ - cloud      │    │     │    ClockVenom)│                   │
-  └──────┬───────┘    │     └───────────────┘                   │ accès initial
-         │            │                                          │
-         │ empreinte  │ payload prêt                             ▼
-         ▼            │
-  ④ EXECUTION / DROP  │         ┌──────────────────────────────────────────┐
-  ┌──────────────┐    │         │                 CIBLE                    │
-  │  ShadowDrop  │────┘         │                                          │
-  │              │              │  ┌────────────┐     ┌──────────────────┐ │
-  │ fileless :   │─────────────►│  │  IronVeil  │     │   NullRelay /    │ │
-  │ memfd_create │              │  │  (rootkit) │     │   ClockVenom     │ │
-  └──────────────┘              │  │            │     │   (agent C2)     │ │
-                                │  │ - /hosts   │     │                  │ │
-  ⑤ PRIVILEGE ESCALATION        │  │ - self-hide│     │ - beacon         │ │
-  ┌──────────────┐              │  │ - hide PID │     │ - shell exec     │ │
-  │  DirtyFrag   │              │  └─────┬──────┘     │ - file upload    │ │
-  │  ssh-keysign │─────────────►│        │ redirect   └──────────────────┘ │
-  │  Fragnesia   │  root        │        │ DNS NTP                │         │
-  └──────────────┘              └────────┼────────────────────────┼─────────┘
-                                         │                        │
-  ⑥ C2 (COMMAND & CONTROL)               │  UDP/123 ou TCP/443    │ HTTPS/443
-  ┌───────────────────────────┐          │  (ClockVenom)          │ (NullRelay)
-  │  Canal NTP                │◄─────────┘                        │
-  │  ntp/server.py            │                                   │
-  │  (VPS 87.106.187.97)      │     ┌─────────────────────┐       │
-  │                           │     │  Canal Cloudflare   │◄──────┘
-  │  Admin API :1338          │     │  server.py + KV     │
-  └───────────┬───────────────┘     │                     │
-              │                     │  Admin API :1337    │
-              │                     └──────────┬──────────┘
-              └──────────────┬─────────────────┘
-                             │ operator_cli.py / tui.py
-                             ▼
-                    ┌─────────────────┐
-                    │   OPÉRATEUR     │
-                    └─────────────────┘
-
-  ⑦ ANTI-FORENSICS
-  ┌──────────────────────────────────────────────────────────┐
-  │  EchoErase                                               │
-  │                                                          │
-  │  - ghost shell   : efface utmp/wtmp, lastlog, auditd     │
-  │  - delayer       : bruite les timestamps shell           │
-  │  - renamer       : obscurcit les noms de fichiers        │
-  └──────────────────────────────────────────────────────────┘
-```
+![Kill Chain](assets/kill-chain.png)
 
 ### Flux complet (séquence opérationnelle)
 
@@ -193,30 +135,7 @@ Modules/
 
 ## Infrastructure Cible
 
-CIPHERFALL — Architecture Cible
-
-                          ┌──────────────┐
-                    ┌────►│      OS      │
-                    │     └──────────────┘
-                    │
-                    │     ┌──────────────┐
-                    ├────►│    Kernel    │
-                    │     └──────────────┘
-                    │
-                    │     ┌───────────────────────┐      ┌─────┐
-                    │     │   Services stockage    │─────►│ S3  │
-    ┌──────────┐    ├────►│                        │─────►│ SMB │
-    │  CIBLE   │────┤     └───────────────────────┘      └─────┘
-    └──────────┘    │
-                    │     ┌──────────────┐      ┌────────────────┐
-                    │     │     BDD      │─────►│ postgres       │
-                    ├────►│              │─────►│ mysql/mariadb  │
-                    │     └──────────────┘─────►│ mongodb        │
-                    │                            └────────────────┘
-                    │
-                    │     ┌──────────────┐
-                    └────►│     Git      │
-                          └──────────────┘
+![Infrastructure Cible](assets/infra-cible.png)
 ---
 
 ## Couverture MITRE ATT&CK
