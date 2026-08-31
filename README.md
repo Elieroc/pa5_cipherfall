@@ -16,6 +16,14 @@ Le github suivant est utilisé pour déployer l'implant (Intial acces) : https:/
 
 ## Arsenal
 
+### Initial Acess : 
+
+Le github suivant est utilisé pour déployer l'implant (Intial acces) : https://github.com/venko-code/holehe_remastered
+
+
+
+
+
 | Nom | Catégorie | Fichier | Description | Fonctionnalités principales |
 |---|---|---|---|---|
 | **Phantom Eye** | Reconnaissance | `phantom_eye.sh` | Collecte passive d'empreinte système sur la cible | Distro/kernel, partages SMB/NFS, buckets S3, bases de données (MariaDB, PostgreSQL, MongoDB), version GitLab — sortie sur une ligne CSV |
